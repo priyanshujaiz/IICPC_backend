@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+
+# Build outputs
+dist/
+*.tsbuildinfo
+
+# Turbo cache
+.turbo/
+
+# Environment variables
+.env
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
