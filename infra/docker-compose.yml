@@ -1,0 +1,77 @@
+services:
+  redpanda:
+    image: redpandadata/redpanda:v25.1.4
+    container_name: iicpc-redpanda
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=1G
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "19092:19092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster info"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - iicpc-network
+
+  timescale:
+    image: timescale/timescaledb:2.17.2-pg15
+    container_name: iicpc-timescale
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: iicpc
+    ports:
+      - "5433:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+    networks:
+      - iicpc-network
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: iicpc-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+    networks:
+      - iicpc-network
+
+  minio:
+    image: minio/minio:RELEASE.2025-02-03T21-03-04Z
+    container_name: iicpc-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+    networks:
+      - iicpc-network
+
+volumes:
+  timescale_data:
+  minio_data:
+
+networks:
+  iicpc-network:
