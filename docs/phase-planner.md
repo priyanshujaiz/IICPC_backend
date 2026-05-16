@@ -7,7 +7,7 @@
 > **Submission Opens:** Final week (June 7–10)
 > **Stack:** TypeScript · Node.js · React · Redpanda · TimescaleDB · Redis · MinIO · Docker/k8s
 
----
+--- 
 
 ## Table of Contents
 
