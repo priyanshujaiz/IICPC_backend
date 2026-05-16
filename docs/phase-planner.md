@@ -449,7 +449,7 @@ if (telemetryBuffer.length >= BATCH_SIZE) {
   await axios.post(`${TELEMETRY_URL}/events/batch`, telemetryBuffer);
   telemetryBuffer.length = 0;
 }
-```
+``` 
 
 #### 2.3 — Telemetry Ingester (`packages/telemetry`)
 **Engineer B + C**
