@@ -9,9 +9,13 @@
     "dev": "tsc --watch"
   },
   "dependencies": {
-    "kafkajs": "^2.2.4"
+    "drizzle-orm": "^0.45.2",
+    "kafkajs": "^2.2.4",
+    "pg": "^8.20.0"
   },
   "devDependencies": {
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
     "typescript": "^5.7.0"
   }
 }

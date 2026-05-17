@@ -13,8 +13,10 @@ Distributed Benchmarking & Hosting Platform — IICPC Summer Hackathon 2026.
 ```
 iicpc-platform/
 ├── packages/
-│   └── shared/               # Shared TypeScript types, Kafka topics, helpers
+│   └── shared/               # Shared TypeScript types, Kafka topics, DB helpers
 │       └── src/
+│           ├── schema.ts      # Drizzle table definitions (submissions + metrics)
+│           ├── db.ts          # createDb() factory — wraps pg Pool with Drizzle
 │           ├── types.ts       # Core domain types (Submission, TelemetryEvent, LiveScore)
 │           ├── topics.ts      # Kafka topic name constants
 │           ├── kafka.ts       # Kafka producer/consumer factory helpers
@@ -24,14 +26,17 @@ iicpc-platform/
 ├── infra/
 │   ├── docker-compose.yml     # Redpanda, TimescaleDB, Redis, MinIO
 │   ├── docker-compose.override.yml
-│   └── migrations/
-│       └── 001_init.sql       # TimescaleDB metrics hypertable
+│   └── drizzle/               # Drizzle-managed migration files (auto-tracked)
+│       ├── 0000_*.sql         # CREATE TABLE submissions + metrics (generated)
+│       └── 0001_hypertable.sql # create_hypertable() + indexes (hand-written)
 ├── scripts/
-│   ├── migrate.ts             # Run database migrations
+│   ├── migrate.ts             # Run database migrations via Drizzle migrator
 │   └── wait-for-infra.sh      # Wait until all containers are healthy
 ├── docs/
 │   ├── blueprint.md           # Full system architecture blueprint
+│   ├── database-design.md     # Three-store schema reference (TimescaleDB · Redis · MinIO)
 │   └── phase-planner.md       # Implementation roadmap
+├── drizzle.config.ts          # Drizzle-kit config (schema path, migrations output, DB URL)
 ├── .env.example               # Environment variable template
 ├── tsconfig.base.json         # Shared TypeScript config
 ├── turbo.json                 # Turborepo task pipeline
@@ -87,7 +92,21 @@ Expected output:
 pnpm migrate
 ```
 
-This creates the `metrics` hypertable in TimescaleDB.
+This applies all pending migrations from `infra/drizzle/` in order:
+- Creates the `submissions` table and `metrics` table
+- Converts `metrics` into a TimescaleDB hypertable (partitioned by time)
+- Creates all query indexes
+
+Drizzle tracks which migrations have already run in a `__drizzle_migrations` table — safe to re-run at any time.
+
+### 5a. Database commands reference
+
+| Command | What it does |
+|---|---|
+| `pnpm migrate` | Apply all pending migrations to TimescaleDB |
+| `pnpm db:generate` | Generate a new migration file after changing `schema.ts` |
+| `pnpm db:studio` | Open Drizzle Studio (visual DB browser) at `localhost:4983` |
+| `pnpm db:push` | Push schema directly to DB without a migration file (dev only) |
 
 ### 6. Build shared package
 
@@ -97,9 +116,23 @@ pnpm build
 
 ## Verifying the Setup
 
-**Check TimescaleDB table:**
+**Check TimescaleDB tables:**
 ```bash
-docker exec iicpc-timescale psql -U postgres -d iicpc -c "\d metrics"
+# List all tables
+docker exec iicpc-timescale psql -U postgres -d iicpc -c "\dt"
+
+# Confirm metrics is a hypertable
+docker exec iicpc-timescale psql -U postgres -d iicpc -c \
+  "SELECT hypertable_name FROM timescaledb_information.hypertables;"
+
+# Confirm submissions table columns
+docker exec iicpc-timescale psql -U postgres -d iicpc -c "\d submissions"
+```
+
+**Open Drizzle Studio (visual DB browser):**
+```bash
+pnpm db:studio
+# Open http://localhost:4983 in your browser
 ```
 
 **Check Redis:**

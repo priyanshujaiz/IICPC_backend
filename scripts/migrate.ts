@@ -1,8 +1,12 @@
-// TimescaleDB Migration Runner — runs all files in infra/migrations/ in order
+
 import 'dotenv/config';
-import { Client } from 'pg';
-import fs from 'fs';
+import { Pool } from 'pg';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const getEnv = (key: string): string => {
   const value = process.env[key];
@@ -11,31 +15,26 @@ const getEnv = (key: string): string => {
 };
 
 async function runMigrations() {
-  const client = new Client({ connectionString: getEnv('TIMESCALE_URL') });
+  const pool = new Pool({ connectionString: getEnv('TIMESCALE_URL') });
 
   try {
-    await client.connect();
+    const db = drizzle(pool);
+
     console.log('✅ Connected to TimescaleDB');
+    console.log('🔄 Running pending migrations from infra/drizzle/ ...');
 
-    const migrationsDir = path.join(process.cwd(), 'infra/migrations');
-    const files = fs
-      .readdirSync(migrationsDir)
-      .filter((f) => f.endsWith('.sql'))
-      .sort(); // alphabetical = numeric order: 001, 002, 003
-
-    for (const file of files) {
-      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
-      await client.query(sql);
-      console.log(`✅ Applied: ${file}`);
-    }
+    await migrate(db, {
+      migrationsFolder: path.join(__dirname, '../infra/drizzle'),
+    });
 
     console.log('🚀 All migrations applied successfully');
   } catch (err) {
     console.error('❌ Migration failed:', err);
     process.exit(1);
   } finally {
-    await client.end();
+    await pool.end();
   }
 }
 
 runMigrations();
+
