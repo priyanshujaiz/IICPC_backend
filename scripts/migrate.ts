@@ -1,4 +1,4 @@
-// TimescaleDB Migration Runner
+// TimescaleDB Migration Runner — runs all files in infra/migrations/ in order
 import 'dotenv/config';
 import { Client } from 'pg';
 import fs from 'fs';
@@ -11,20 +11,25 @@ const getEnv = (key: string): string => {
 };
 
 async function runMigrations() {
-  const client = new Client({
-    connectionString: getEnv('TIMESCALE_URL'),
-  });
+  const client = new Client({ connectionString: getEnv('TIMESCALE_URL') });
 
   try {
     await client.connect();
     console.log('✅ Connected to TimescaleDB');
 
-    const migrationPath = path.join(process.cwd(), 'infra/migrations/001_init.sql');
-    const sql = fs.readFileSync(migrationPath, 'utf-8');
+    const migrationsDir = path.join(process.cwd(), 'infra/migrations');
+    const files = fs
+      .readdirSync(migrationsDir)
+      .filter((f) => f.endsWith('.sql'))
+      .sort(); // alphabetical = numeric order: 001, 002, 003
 
-    await client.query(sql);
-    console.log('✅ Migration 001_init.sql applied successfully');
-    console.log('✅ metrics hypertable is ready');
+    for (const file of files) {
+      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
+      await client.query(sql);
+      console.log(`✅ Applied: ${file}`);
+    }
+
+    console.log('🚀 All migrations applied successfully');
   } catch (err) {
     console.error('❌ Migration failed:', err);
     process.exit(1);
