@@ -62,5 +62,19 @@ submitRouter.post('/', requireAuth, upload.single('file'), async (req, res) => {
     language: req.body.language ?? 'unknown',
   });
 
+  // ── Trigger the sandbox pipeline ───────────────────────────────────────────
+  // Fire-and-forget: gateway returns 202 immediately.
+  // If sandbox is temporarily down, submission stays 'queued' in Redis and the
+  // error is logged. Client can poll GET /runs/:id to track status.
+  const sandboxUrl = getEnv('SANDBOX_URL');
+  fetch(`${sandboxUrl}/sandbox/deploy`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ submissionId, artifactPath }),
+  }).catch((err: Error) => {
+    console.error('[gateway] failed to trigger sandbox for', submissionId, ':', err.message);
+  });
+
   res.status(202).json({ submissionId });
 });
+
