@@ -13,34 +13,46 @@ Distributed Benchmarking & Hosting Platform — IICPC Summer Hackathon 2026.
 ```
 iicpc-platform/
 ├── packages/
-│   └── shared/               # Shared TypeScript types, Kafka topics, DB helpers
+│   ├── shared/                    # Shared TypeScript types, Kafka topics, DB helpers
+│   │   └── src/
+│   │       ├── schema.ts          # Drizzle table definitions (submissions + metrics)
+│   │       ├── db.ts              # createDb() factory — wraps pg Pool with Drizzle
+│   │       ├── types.ts           # Core domain types (Submission, TelemetryEvent, LiveScore)
+│   │       ├── topics.ts          # Kafka topic name constants
+│   │       ├── kafka.ts           # Kafka producer/consumer factory helpers
+│   │       ├── errors.ts          # Typed error classes
+│   │       ├── config.ts          # getEnv() / getEnvNumber() helpers
+│   │       └── index.ts           # Barrel export
+│   └── gateway/                   # API Gateway — auth, upload, status routing
 │       └── src/
-│           ├── schema.ts      # Drizzle table definitions (submissions + metrics)
-│           ├── db.ts          # createDb() factory — wraps pg Pool with Drizzle
-│           ├── types.ts       # Core domain types (Submission, TelemetryEvent, LiveScore)
-│           ├── topics.ts      # Kafka topic name constants
-│           ├── kafka.ts       # Kafka producer/consumer factory helpers
-│           ├── errors.ts      # Typed error classes
-│           ├── config.ts      # getEnv() / getEnvNumber() helpers
-│           └── index.ts       # Barrel export
+│           ├── app.ts             # Express app — middleware chain (helmet→rate-limit→cors→json)
+│           ├── server.ts          # HTTP listen entry point + MinIO bucket setup on startup
+│           ├── setup.ts           # ensureInfrastructure() — creates MinIO bucket if missing
+│           ├── middleware/
+│           │   └── auth.ts        # requireAuth() — JWT verify middleware
+│           └── routes/
+│               ├── health.ts      # GET /health — k8s liveness probe
+│               ├── auth.ts        # POST /auth/login — issue signed JWT
+│               ├── submit.ts      # POST /submit — multer-s3 stream to MinIO + Redis meta
+│               └── runs.ts        # GET /runs/:id — submission status from Redis
 ├── infra/
-│   ├── docker-compose.yml     # Redpanda, TimescaleDB, Redis, MinIO
+│   ├── docker-compose.yml         # Redpanda, TimescaleDB, Redis, MinIO
 │   ├── docker-compose.override.yml
-│   └── drizzle/               # Drizzle-managed migration files (auto-tracked)
-│       ├── 0000_*.sql         # CREATE TABLE submissions + metrics (generated)
-│       └── 0001_hypertable.sql # create_hypertable() + indexes (hand-written)
+│   └── drizzle/                   # Drizzle-managed migration files (auto-tracked)
+│       ├── 0000_*.sql             # CREATE TABLE submissions + metrics (generated)
+│       └── 0001_hypertable.sql    # create_hypertable() + indexes (hand-written)
 ├── scripts/
-│   ├── migrate.ts             # Run database migrations via Drizzle migrator
-│   └── wait-for-infra.sh      # Wait until all containers are healthy
+│   ├── migrate.ts                 # Run database migrations via Drizzle migrator
+│   └── wait-for-infra.sh          # Wait until all containers are healthy
 ├── docs/
-│   ├── blueprint.md           # Full system architecture blueprint
-│   ├── database-design.md     # Three-store schema reference (TimescaleDB · Redis · MinIO)
-│   └── phase-planner.md       # Implementation roadmap
-├── drizzle.config.ts          # Drizzle-kit config (schema path, migrations output, DB URL)
-├── .env.example               # Environment variable template
-├── tsconfig.base.json         # Shared TypeScript config
-├── turbo.json                 # Turborepo task pipeline
-└── pnpm-workspace.yaml        # Workspace package declarations
+│   ├── blueprint.md               # Full system architecture blueprint
+│   ├── database-design.md         # Three-store schema reference (TimescaleDB · Redis · MinIO)
+│   └── phase-planner.md           # Implementation roadmap
+├── drizzle.config.ts              # Drizzle-kit config (schema path, migrations output, DB URL)
+├── .env.example                   # Environment variable template
+├── tsconfig.base.json             # Shared TypeScript config
+├── turbo.json                     # Turborepo task pipeline
+└── pnpm-workspace.yaml            # Workspace package declarations
 ```
 
 ## Getting Started
@@ -114,7 +126,97 @@ Drizzle tracks which migrations have already run in a `__drizzle_migrations` tab
 pnpm build
 ```
 
-## Verifying the Setup
+### 7. Start the Gateway (Phase 1)
+
+```bash
+cd packages/gateway
+pnpm dev
+```
+
+Expected output:
+```
+[gateway] MinIO bucket "submissions" created (or already exists)
+[gateway] listening on port 3000
+```
+
+---
+
+## Environment Variables
+
+All variables live in `.env` at the project root. Copy from `.env.example`:
+
+| Variable | Default | Description |
+|---|---|---|
+| `JWT_SECRET` | `supersecretdev` | Secret key for signing JWT tokens |
+| `ADMIN_USERNAME` | `admin` | Username for `POST /auth/login` |
+| `ADMIN_PASSWORD` | `admin123` | Password for `POST /auth/login` |
+| `PORT` | `3000` | Gateway HTTP port |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
+| `KAFKA_BROKERS` | `localhost:19092` | Redpanda/Kafka broker addresses |
+| `MINIO_ENDPOINT` | `http://localhost:9000` | MinIO endpoint URL (full URL including port) |
+| `MINIO_ACCESS_KEY` | `minioadmin` | MinIO access key |
+| `MINIO_SECRET_KEY` | `minioadmin123` | MinIO secret key |
+| `TIMESCALE_URL` | `postgresql://postgres:postgres@localhost:5433/iicpc` | TimescaleDB connection string |
+| `BOT_COUNT` | `50` | Number of bot workers per submission |
+| `FRONTEND_URL` | `http://localhost:5173` | Allowed CORS origin |
+
+---
+
+## Gateway API Reference
+
+Base URL: `http://localhost:3000`
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `GET` | `/health` | None | Liveness probe — returns `{ status, uptime }` |
+| `POST` | `/auth/login` | None | Returns signed JWT — body: `{ username, password }` |
+| `POST` | `/submit` | Bearer JWT | Upload code zip — body: `multipart/form-data` field `file` + `language` |
+| `GET` | `/runs/:id` | Bearer JWT | Returns submission status + metadata from Redis |
+
+### Postman Test Sequence
+
+**1. Health check — no auth needed**
+```
+GET http://localhost:3000/health
+```
+Expected: `{ "status": "ok", "uptime": 3.4 }`
+
+**2. Get a JWT token**
+```
+POST http://localhost:3000/auth/login
+Content-Type: application/json
+
+{ "username": "admin", "password": "admin123" }
+```
+Expected: `{ "token": "eyJhbG..." }` — save this token.
+
+**3. Verify auth guard**
+```
+GET http://localhost:3000/runs/fake-id
+```
+No Authorization header. Expected: `401 { "error": "Missing or malformed Authorization header" }`
+
+**4. Upload a zip file**
+```
+POST http://localhost:3000/submit
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+
+  file    → any .zip file
+  language → cpp
+```
+Expected: `202 { "submissionId": "a3f9b2c1-..." }` — save the submissionId.
+
+**5. Check submission status**
+```
+GET http://localhost:3000/runs/<submissionId>
+Authorization: Bearer <token>
+```
+Expected: `{ "submissionId": "...", "status": "queued", "contestantId": "admin", "language": "cpp" }`
+
+---
+
+## Verifying Infrastructure
 
 **Check TimescaleDB tables:**
 ```bash
@@ -145,6 +247,8 @@ docker exec iicpc-redis redis-cli ping
 
 Open [http://localhost:9001](http://localhost:9001) in your browser.
 Login: `minioadmin` / `minioadmin123`
+
+---
 
 ## Stopping Infrastructure
 
