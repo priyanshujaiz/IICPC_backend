@@ -1,4 +1,67 @@
 services:
+  # ── Application Services ───────────────────────────────────────────────────
+
+  gateway:
+    build:
+      context: ..                                  # monorepo root
+      dockerfile: packages/gateway/Dockerfile
+    container_name: iicpc-gateway
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - ../.env                                    # JWT_SECRET, ADMIN_* from root .env
+    environment:
+      PORT: "3000"
+      REDIS_URL: redis://redis:6379                # internal DNS — not localhost
+      MINIO_ENDPOINT: http://minio:9000            # internal DNS — not localhost
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      MINIO_BUCKET: submissions
+      SANDBOX_URL: http://sandbox:3001             # internal service call
+      FRONTEND_URL: "http://localhost:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      sandbox:
+        condition: service_started                 # sandbox has no healthcheck yet
+    networks:
+      - iicpc-network
+
+  sandbox:
+    build:
+      context: ..                                  # monorepo root
+      dockerfile: packages/sandbox/Dockerfile
+    container_name: iicpc-sandbox
+    restart: unless-stopped
+    ports:
+      - "3001:3001"                                # exposed for direct curl during dev
+    env_file:
+      - ../.env                                    # picks up any overrides
+    environment:
+      SANDBOX_PORT: "3001"
+      KAFKA_BROKERS: redpanda:9092                 # internal Redpanda broker
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Dockerode needs Docker daemon access
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    networks:
+      - iicpc-network   # talks to redis, minio, redpanda, gateway
+      - sandbox-net     # talks to submission containers by internal IP
+
+  # ── Infrastructure Services ────────────────────────────────────────────────
+
   redpanda:
     image: redpandadata/redpanda:v25.1.4
     container_name: iicpc-redpanda
@@ -75,3 +138,10 @@ volumes:
 
 networks:
   iicpc-network:
+    driver: bridge
+    name: iicpc-network      # pin exact name — prevents compose project-prefix (infra_iicpc-network)
+
+  sandbox-net:
+    driver: bridge
+    internal: true           # submission containers get NO internet routing
+    name: sandbox-net        # pin exact name — runner.ts hardcodes 'sandbox-net', must match

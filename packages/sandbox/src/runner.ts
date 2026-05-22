@@ -1,6 +1,8 @@
-import Dockerode from "dockerode";
+import Dockerode from 'dockerode';
 
-const docker = new Dockerode();
+// Explicit socket path — matches builder.ts and works inside the sandbox container
+// where /var/run/docker.sock is mounted via compose volumes.
+const docker = new Dockerode({ socketPath: '/var/run/docker.sock' });
 
 export interface ContainerInfo{
     containerId:string;
