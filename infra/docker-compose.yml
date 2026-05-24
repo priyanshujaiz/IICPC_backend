@@ -60,6 +60,43 @@ services:
       - iicpc-network   # talks to redis, minio, redpanda, gateway
       - sandbox-net     # talks to submission containers by internal IP
 
+  
+  bot-fleet:
+      build:
+        context: ..
+        dockerfile: packages/bot-fleet/Dockerfile
+      container_name: iicpc-bot-fleet
+      restart: unless-stopped
+      env_file:
+        - ../.env
+      environment:
+        KAFKA_BROKERS: redpanda:9092
+        TELEMETRY_URL: http://telemetry:4000
+        BOT_COUNT: "5"
+        BOT_LAMBDA: "10"
+      depends_on:
+        redpanda:
+          condition: service_healthy
+        telemetry:
+          condition: service_started
+      networks:
+        - iicpc-network   # ← Kafka + Telemetry
+        - sandbox-net     # ← contestant containers by IP
+    
+  telemetry:
+    build:
+      context: ..
+      dockerfile: packages/telemetry/Dockerfile
+    container_name: iicpc-telemetry
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    env_file:
+      - ../.env
+    environment:
+      TELEMETRY_PORT: "4000"
+    networks:
+      - iicpc-network   # ← receives from bots only
   # ── Infrastructure Services ────────────────────────────────────────────────
 
   redpanda:
@@ -145,3 +182,4 @@ networks:
     driver: bridge
     internal: true           # submission containers get NO internet routing
     name: sandbox-net        # pin exact name — runner.ts hardcodes 'sandbox-net', must match
+

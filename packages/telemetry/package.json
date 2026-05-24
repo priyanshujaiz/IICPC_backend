@@ -1,0 +1,19 @@
+{
+  "name": "@iicpc/telemetry",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@iicpc/shared": "workspace:*",
+    "fastify": "^4.28.1",
+    "hdr-histogram-js": "^3.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.4.5"
+  }
+}
