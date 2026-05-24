@@ -113,6 +113,9 @@ importers:
         specifier: ^3.22.4
         version: 3.25.76
     devDependencies:
+      '@types/bcryptjs':
+        specifier: ^2.4.6
+        version: 2.4.6
       '@types/cors':
         specifier: ^2.8.17
         version: 2.8.19
@@ -128,6 +131,9 @@ importers:
       '@types/multer-s3':
         specifier: ^3.0.3
         version: 3.0.3
+      '@types/pg':
+        specifier: ^8.11.6
+        version: 8.20.0
       '@types/uuid':
         specifier: ^9.0.7
         version: 9.0.8
@@ -1017,6 +1023,9 @@ packages:
     resolution: {integrity: sha512-fVdCsnmYoKICsycbWuuGp6Jvi51/3G/UluFWuAUCvR8PIW5IJkAk5BM9UF8PSm0Q2IphWHFZjYEgjHsh3B9y/g==}
     cpu: [arm64]
     os: [win32]
+
+  '@types/bcryptjs@2.4.6':
+    resolution: {integrity: sha512-9xlo6R2qDs5uixm0bcIqCeMCE6HiQsIyel9KQySStiyqNl2tnj2mP3DX1Nf56MD6KMenNNlBBsy3LJ7gUEQPXQ==}
 
   '@types/body-parser@1.19.6':
     resolution: {integrity: sha512-HLFeCYgz89uk22N5Qg3dvGvsv46B8GLvKKo1zKG4NybA8U2DiEO3w9lqGg29t/tfLRJpJ6iQxnVw4OnB7MoM9g==}
@@ -3328,6 +3337,8 @@ snapshots:
 
   '@turbo/windows-arm64@2.9.14':
     optional: true
+
+  '@types/bcryptjs@2.4.6': {}
 
   '@types/body-parser@1.19.6':
     dependencies:

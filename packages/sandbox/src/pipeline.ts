@@ -5,6 +5,7 @@ import { detectLanguage, buildImage } from './builder.js';
 import { startContainer, removeContainer } from './runner.js';
 import { waitForHealthy } from './health-poller.js';
 import { publishSubmissionReady, publishSubmissionStopped } from './publisher.js';
+import { watchContainer } from './watchdog.js';
 
 const redis = new Redis(getEnv('REDIS_URL'));
 
@@ -61,6 +62,11 @@ export async function deploy(submissionId: string, artifactPath: string): Promis
     // ── Step 7: Mark running + publish submission.ready ───────────────────
     await setStatus(submissionId, 'running');
     await publishSubmissionReady({ submissionId, host, port });
+
+    // ── Step 8: Watch container — clean up on error or SIGTERM ────────────
+    watchContainer(containerId, submissionId).catch((err) => {
+      console.error(`[sandbox] watchdog error for ${submissionId}:`, err);
+    });
 
   } catch (err) {
     console.error(`[sandbox] pipeline failed for ${submissionId}:`, err);

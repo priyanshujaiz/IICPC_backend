@@ -6,6 +6,22 @@ Contestants upload their trading engine code (C++, Rust, Go). The platform conta
 
 ---
 
+## Build Status
+
+| Phase | Service | Status | Notes |
+|---|---|---|---|
+| **Phase 0** | `packages/shared` | ✅ Complete | Types, Kafka helpers, Drizzle schema, config |
+| **Phase 0** | `infra/` + migrations | ✅ Complete | Docker Compose, TimescaleDB migrations |
+| **Phase 1** | `packages/gateway` | ✅ Complete | DB-backed JWT auth, MinIO upload, Redis status, sandbox trigger |
+| **Phase 1** | `packages/sandbox` | ✅ Complete | Build pipeline, dual-NIC isolation, container watchdog, max runtime |
+| **Phase 2** | `packages/bot-fleet` | ✅ Complete | worker_threads, Poisson timing, circuit breaker, batch telemetry |
+| **Phase 2** | `packages/telemetry` | ✅ Complete | Fastify, HDR histogram, TPS counter, 1s flush cycle |
+| **Phase 3** | `packages/leaderboard` | 🔜 Next | SSE stream, Redis sorted set, composite score |
+| **Phase 4** | `frontend/` | ⬜ Pending | React, Recharts, live dashboard |
+| **Phase 5** | `infra/k8s/` | ⬜ Pending | Kubernetes manifests, HPA |
+
+---
+
 ## Prerequisites
 
 | Tool | Version | Purpose |
@@ -21,80 +37,79 @@ Contestants upload their trading engine code (C++, Rust, Go). The platform conta
 ```
 iicpc-platform/
 ├── packages/
-│   ├── shared/                        # @iicpc/shared — contract layer imported by every service
+│   ├── shared/                          # @iicpc/shared — contract layer
 │   │   └── src/
-│   │       ├── types.ts               # Domain interfaces: Submission, TelemetryEvent, LiveScore, Kafka events
-│   │       ├── schema.ts              # Drizzle ORM table definitions (submissions + metrics hypertable)
-│   │       ├── db.ts                  # createDb(pool) — typed Drizzle client factory
-│   │       ├── topics.ts              # Kafka topic constants: SUBMISSION_READY, SUBMISSION_STOPPED
-│   │       ├── kafka.ts               # createProducer() / createConsumer() factory helpers
-│   │       ├── errors.ts              # Typed errors: SandboxBuildError, ContainerTimeoutError
-│   │       ├── config.ts              # getEnv() / getEnvNumber() — fail-fast env helpers
-│   │       └── index.ts               # Barrel export — single import for all of the above
+│   │       ├── types.ts                 # Domain interfaces: Submission, TelemetryEvent, LiveScore
+│   │       ├── schema.ts                # Drizzle ORM: users + submissions + metrics tables
+│   │       ├── db.ts                    # createDb(pool) — typed Drizzle client factory
+│   │       ├── topics.ts                # Kafka topic constants
+│   │       ├── kafka.ts                 # createProducer() / createConsumer() factories
+│   │       ├── errors.ts                # SandboxBuildError, ContainerTimeoutError
+│   │       ├── config.ts                # getEnv() / getEnvNumber() — fail-fast helpers
+│   │       └── index.ts                 # Barrel export
 │   │
-│   ├── gateway/                       # API Gateway — public HTTP entry point (port 3000)
+│   ├── gateway/                         # API Gateway — public HTTP entry point (port 3000)
 │   │   ├── Dockerfile
 │   │   └── src/
-│   │       ├── app.ts                 # Express app: helmet → rate-limit → cors → json → routes
-│   │       ├── server.ts              # HTTP listen + MinIO bucket creation on startup
-│   │       ├── setup.ts               # ensureInfrastructure() — idempotent bucket creation
+│   │       ├── app.ts                   # Express: helmet → rate-limit → cors → json → routes
+│   │       ├── server.ts                # HTTP listen + MinIO bucket creation on startup
+│   │       ├── setup.ts                 # ensureInfrastructure() — idempotent bucket creation
+│   │       ├── db.ts                    # Drizzle client (pg pool → TimescaleDB)
 │   │       ├── middleware/
-│   │       │   └── auth.ts            # requireAuth() — JWT Bearer verification middleware
+│   │       │   └── auth.ts              # requireAuth() + requireAdmin() — JWT middleware
 │   │       └── routes/
-│   │           ├── health.ts          # GET  /health — k8s liveness probe
-│   │           ├── auth.ts            # POST /auth/login — issue signed JWT (30d expiry)
-│   │           ├── submit.ts          # POST /submit — multer-s3 stream to MinIO, trigger sandbox
-│   │           └── runs.ts            # GET  /runs/:id — submission status from Redis
+│   │           ├── health.ts            # GET  /health
+│   │           ├── auth.ts              # POST /auth/register + POST /auth/login (DB-backed)
+│   │           ├── submit.ts            # POST /submit — MinIO upload + Redis + PostgreSQL + sandbox
+│   │           └── runs.ts              # GET  /runs/:id (Redis) + GET /runs (PostgreSQL history)
 │   │
-│   └── sandbox/                       # Sandbox Engine — container builder (port 3001, internal only)
+│   ├── sandbox/                         # Sandbox Engine — container builder (port 3001, internal)
+│   │   ├── Dockerfile
+│   │   └── src/
+│   │       ├── server.ts                # Express: POST /sandbox/deploy + POST /sandbox/stop/:id
+│   │       ├── pipeline.ts              # Full build pipeline + watchdog launch
+│   │       ├── watchdog.ts              # Container lifecycle: detects exit, enforces MAX_RUNTIME_MS
+│   │       ├── minio-client.ts          # Download artifact from MinIO → /tmp/iicpc/{id}/
+│   │       ├── builder.ts               # Detect language, build Docker image via Dockerode
+│   │       ├── runner.ts                # createContainer() with full isolation, get sandbox-net IP
+│   │       ├── health-poller.ts         # Poll GET /health every 2s, 30s timeout
+│   │       └── publisher.ts             # Kafka: publish submission.ready / submission.stopped
+│   │
+│   ├── bot-fleet/                       # Bot Fleet — distributed load generator (no public port)
+│   │   ├── Dockerfile
+│   │   └── src/
+│   │       ├── orchestrator.ts          # Kafka consumer + worker pool (Map<submissionId, Worker[]>)
+│   │       ├── bot-worker.ts            # worker_thread: Poisson loop + circuit breaker + batch telemetry
+│   │       └── scenario.ts              # Order generation: 60% LIMIT / 25% MARKET / 15% CANCEL
+│   │
+│   └── telemetry/                       # Telemetry Ingester — metrics collector (port 4000, internal)
 │       ├── Dockerfile
 │       └── src/
-│           ├── server.ts              # Express: POST /sandbox/deploy (fire-and-forget pipeline)
-│           ├── pipeline.ts            # Orchestrates all steps + Redis status updates
-│           ├── minio-client.ts        # Download artifact from MinIO → /tmp/iicpc/{id}/, auto-extract zip
-│           ├── builder.ts             # Detect language, write Dockerfile, docker.buildImage() via socket
-│           ├── runner.ts              # createContainer() with full isolation config, get sandbox-net IP
-│           ├── health-poller.ts       # Poll GET /health every 2s, 30s timeout → ContainerTimeoutError
-│           └── publisher.ts          # Kafka: publish submission.ready / submission.stopped
+│           ├── server.ts                # Fastify: POST /events + POST /events/batch + GET /health
+│           ├── histogram.ts             # HDR Histogram per submission (O(1) p50/p90/p99)
+│           ├── tps-counter.ts           # Sliding 1s window TPS counter per submission
+│           ├── flush.ts                 # setInterval(1000ms): log percentiles to console (Phase 3: DB write)
+│           └── routes/
+│               └── events.ts            # Route handlers for single + batch telemetry events
 │
 ├── infra/
-│   ├── docker-compose.yml             # All 6 services: gateway, sandbox, redpanda, timescale, redis, minio
-│   ├── docker-compose.override.yml    # Dev overrides (hot-reload mounts)
-│   └── drizzle/                       # Drizzle-managed SQL migrations
-│       ├── 0000_*.sql                 # CREATE TABLE submissions + metrics (auto-generated)
-│       └── 0001_hypertable.sql        # create_hypertable() + indexes (hand-written)
+│   ├── docker-compose.yml               # All 8 services: gateway, sandbox, bot-fleet, telemetry,
+│   │                                    #   redpanda, timescale, redis, minio
+│   ├── docker-compose.override.yml      # Dev overrides (hot-reload mounts)
+│   └── drizzle/                         # Drizzle-managed SQL migrations
+│       ├── 0000_*.sql                   # CREATE TABLE submissions + metrics
+│       ├── 0001_*.sql                   # create_hypertable() + indexes + users table (generated)
+│       └── 0002_users.sql               # users table + idx_users_username
 │
 ├── scripts/
-│   ├── migrate.ts                     # Apply all pending Drizzle migrations to TimescaleDB
-│   └── wait-for-infra.sh              # Poll Docker health endpoints until all containers ready
+│   ├── migrate.ts                       # Apply all pending migrations to TimescaleDB
+│   └── wait-for-infra.sh                # Poll Docker health endpoints
 │
-├── docs/
-│   ├── blueprint.md                   # Full system architecture blueprint
-│   ├── database-design.md             # Three-store schema reference (TimescaleDB · Redis · MinIO)
-│   └── phase-planner.md               # Phase-by-phase engineering roadmap
-│
-├── drizzle.config.ts                  # Drizzle Kit config (schema → infra/drizzle/)
-├── .env.example                       # Environment variable template (copy to .env)
-├── tsconfig.base.json                 # Shared TypeScript config extended by every package
-├── turbo.json                         # Turborepo pipeline (build @iicpc/shared first)
-└── pnpm-workspace.yaml                # Declares packages/*, frontend as workspace packages
+└── docs/
+    ├── blueprint.md                     # Full system architecture blueprint
+    ├── database-design.md               # Three-store schema (TimescaleDB · Redis · MinIO)
+    └── phase-planner.md                 # Phase-by-phase engineering roadmap
 ```
-
----
-
-## Build Status
-
-| Phase | Service | Status | Notes |
-|---|---|---|---|
-| **Phase 0** | `packages/shared` | ✅ Complete | Types, Kafka helpers, Drizzle schema, config |
-| **Phase 0** | `infra/` + migrations | ✅ Complete | Docker Compose, TimescaleDB migrations |
-| **Phase 1** | `packages/gateway` | ✅ Complete | JWT auth, MinIO upload, Redis status, sandbox trigger |
-| **Phase 1** | `packages/sandbox` | ✅ Complete | Build pipeline, dual-NIC isolation, Dockerode API |
-| **Phase 2** | `packages/bot-fleet` | 🔜 Next | worker_threads, Poisson timing |
-| **Phase 2** | `packages/telemetry` | 🔜 Next | Fastify, HDR histogram |
-| **Phase 3** | `packages/leaderboard` | ⬜ Pending | SSE stream, Redis sorted set |
-| **Phase 4** | `frontend/` | ⬜ Pending | React, Recharts, live dashboard |
-| **Phase 5** | `infra/k8s/` | ⬜ Pending | Kubernetes manifests, HPA |
 
 ---
 
@@ -103,17 +118,19 @@ iicpc-platform/
 The platform uses **two Docker networks** to enforce isolation:
 
 ```
-┌─────────────────── iicpc-network (bridge) ──────────────────────┐
-│  gateway   sandbox   redpanda   timescale   redis   minio        │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────── iicpc-network (bridge) ────────────────────────────────────┐
+│  gateway   sandbox   bot-fleet   telemetry   redpanda   timescale   redis   minio       │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
 
-┌─────────────── sandbox-net (bridge, internal=true) ─────────────┐
-│  sandbox   [submission-{id} containers]                          │
-│  NO outbound internet routing — internal flag enforced           │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────── sandbox-net (bridge, internal=true) ───────────────────────────────┐
+│  sandbox (dual-NIC)   bot-fleet (dual-NIC)   [submission-{id} containers]              │
+│  NO outbound internet routing — internal flag enforced                                  │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Dual-NIC design:** The sandbox service attaches to both networks. It reaches Redis/MinIO/Redpanda over `iicpc-network`, and reaches submission containers over `sandbox-net` using the container's internal IP directly (no host-port mapping needed). Bot-fleet workers will use the same `sandbox-net` IP to fire orders at contestant containers.
+**Dual-NIC services:** Both `sandbox` and `bot-fleet` attach to both networks.
+- They reach Redis / MinIO / Redpanda / Telemetry over `iicpc-network`
+- They reach submission containers over `sandbox-net` using the container's internal IP directly
 
 ---
 
@@ -131,7 +148,7 @@ pnpm install
 cp .env.example .env
 ```
 
-The defaults in `.env.example` work as-is for local development.
+Defaults in `.env.example` work as-is for local development.
 
 ### 3. Start all infrastructure containers
 
@@ -139,109 +156,77 @@ The defaults in `.env.example` work as-is for local development.
 docker compose -f infra/docker-compose.yml up -d
 ```
 
-This starts 4 infrastructure services:
-
 | Container | Image | Port | Purpose |
 |---|---|---|---|
 | `iicpc-redpanda` | redpandadata/redpanda | `19092` | Kafka-compatible message broker |
-| `iicpc-timescale` | timescale/timescaledb-pg15 | `5433` | Time-series metrics store |
+| `iicpc-timescale` | timescale/timescaledb-pg15 | `5433` | Time-series metrics + user/submission store |
 | `iicpc-redis` | redis:7.2-alpine | `6379` | Live leaderboard + submission status |
 | `iicpc-minio` | minio/minio | `9000/9001` | Object store for uploaded artifacts |
 
-### 4. Wait for all containers to be healthy
-
-```bash
-bash scripts/wait-for-infra.sh
-```
-
-Expected output:
-```
-✅ Redpanda healthy
-✅ Timescale healthy
-✅ Redis healthy
-✅ MinIO healthy
-🚀 All infrastructure services are healthy!
-```
-
-### 5. Run database migrations
+### 4. Run database migrations
 
 ```bash
 pnpm migrate
 ```
 
-Applies all pending migrations from `infra/drizzle/` in order:
-- Creates the `submissions` table
-- Creates the `metrics` table and converts it to a TimescaleDB hypertable (partitioned by `time`)
-- Creates composite indexes for fast per-submission queries
+Creates all three tables: `submissions`, `metrics` (hypertable), `users`.
 
-Drizzle tracks applied migrations in `__drizzle_migrations` — safe to re-run.
+```bash
+# Verify
+docker exec iicpc-timescale psql -U postgres -d iicpc -c "\dt"
+#  Schema |    Name     | Type  |  Owner
+# --------+-------------+-------+----------
+#  public | metrics     | table | postgres
+#  public | submissions | table | postgres
+#  public | users       | table | postgres
+```
 
-### 5a. Database commands reference
-
-| Command | What it does |
-|---|---|
-| `pnpm migrate` | Apply all pending migrations to TimescaleDB |
-| `pnpm db:generate` | Generate a new migration file after changing `schema.ts` |
-| `pnpm db:studio` | Open Drizzle Studio (visual DB browser) at `localhost:4983` |
-| `pnpm db:push` | Push schema directly to DB without a migration file (dev only) |
-
-### 6. Build the shared package
+### 5. Build the shared package
 
 ```bash
 pnpm build
 ```
 
-Turborepo builds `@iicpc/shared` first (other packages depend on its compiled output).
-
----
-
-## Running Services in Development
-
-Each service has a `pnpm dev` script that uses `tsx watch` with the root `.env`:
+### 6. Run services in development
 
 ```bash
 # Terminal 1 — Gateway (port 3000)
 cd packages/gateway && pnpm dev
 
-# Terminal 2 — Sandbox (port 3001)
+# Terminal 2 — Sandbox (port 3001, internal)
 cd packages/sandbox && pnpm dev
-```
 
-Expected gateway startup output:
-```
-[gateway] MinIO bucket "submissions" already exists
-[gateway] listening on port 3000
-```
+# Terminal 3 — Telemetry (port 4000, internal)
+cd packages/telemetry && pnpm dev
 
-Expected sandbox startup output:
-```
-[sandbox] listening on port 3001
+# Terminal 4 — Bot Fleet (no port, Kafka-driven)
+cd packages/bot-fleet && pnpm dev
 ```
 
 ---
 
 ## Environment Variables
 
-All variables live in `.env` at the project root:
-
 | Variable | Dev Default | Description |
 |---|---|---|
 | `JWT_SECRET` | `supersecretchangeme...` | Signing secret for JWT tokens |
-| `ADMIN_USERNAME` | `admin` | Username for `POST /auth/login` |
-| `ADMIN_PASSWORD` | `admin` | Password for `POST /auth/login` |
 | `PORT` | `3000` | Gateway HTTP listen port |
 | `SANDBOX_URL` | `http://localhost:3001` | Internal URL gateway uses to call sandbox |
 | `SANDBOX_PORT` | `3001` | Sandbox HTTP listen port |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
-| `KAFKA_BROKERS` | `localhost:19092` | Redpanda broker address (comma-separated) |
-| `MINIO_ENDPOINT` | `http://localhost:9000` | MinIO endpoint (full URL including port) |
+| `KAFKA_BROKERS` | `localhost:19092` | Redpanda broker address |
+| `MINIO_ENDPOINT` | `http://localhost:9000` | MinIO endpoint |
 | `MINIO_ACCESS_KEY` | `minioadmin` | MinIO access key |
 | `MINIO_SECRET_KEY` | `minioadmin123` | MinIO secret key |
-| `TIMESCALE_URL` | `postgres://postgres:postgres@localhost:5433/iicpc` | TimescaleDB connection string |
-| `BOT_COUNT` | `10` | Bot workers spawned per submission |
-| `FRONTEND_URL` | `http://localhost:5173` | Allowed CORS origin for gateway |
+| `TIMESCALE_URL` | `postgres://postgres:postgres@localhost:5433/iicpc` | TimescaleDB connection |
+| `FRONTEND_URL` | `http://localhost:5173` | Allowed CORS origin |
+| `BOT_COUNT` | `5` | Bot worker threads spawned per submission |
+| `BOT_LAMBDA` | `10` | Poisson rate — target orders/sec per bot |
+| `TELEMETRY_URL` | `http://localhost:4000` | Telemetry ingester URL (bot-fleet → telemetry) |
+| `TELEMETRY_PORT` | `4000` | Telemetry Fastify listen port |
+| `MAX_RUNTIME_MS` | `600000` | Max time a submission container runs (10 min default) |
 
-> **Docker Compose override:** When services run inside Docker, `REDIS_URL`, `MINIO_ENDPOINT`, `KAFKA_BROKERS`, and `SANDBOX_URL` are automatically overridden to use internal Docker DNS names (`redis`, `minio`, `redpanda`, `sandbox`) — no manual change needed.
+> **Docker Compose:** Internal service URLs are automatically overridden via the `environment:` block in `docker-compose.yml`. No manual change needed.
 
 ---
 
@@ -249,108 +234,180 @@ All variables live in `.env` at the project root:
 
 Base URL: `http://localhost:3000`
 
+### Auth
+
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
 | `GET` | `/health` | None | Liveness probe — `{ status: 'ok', uptime }` |
-| `POST` | `/auth/login` | None | Issue JWT — body: `{ username, password }` |
-| `POST` | `/submit` | Bearer JWT | Upload code archive → MinIO → trigger sandbox |
-| `GET` | `/runs/:id` | Bearer JWT | Submission status + metadata from Redis |
+| `POST` | `/auth/register` | None | Register a contestant — `{ username, password }` → `{ token, userId, username, role }` |
+| `POST` | `/auth/login` | None | Login — `{ username, password }` → `{ token, userId, username, role }` |
+
+### Submissions
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `POST` | `/submit` | Bearer JWT | Upload code archive → MinIO + Redis + PostgreSQL + trigger sandbox |
+| `GET` | `/runs/:id` | Bearer JWT | Real-time submission status from Redis |
+| `GET` | `/runs` | Bearer JWT | All submissions for the authenticated user (PostgreSQL) |
 
 ### Sandbox Internal API
 
-Base URL: `http://localhost:3001` (not exposed to the internet — called by gateway only)
+Base URL: `http://localhost:3001` — not exposed externally, called by gateway only.
 
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/health` | Sandbox liveness probe |
-| `POST` | `/sandbox/deploy` | Trigger build pipeline — body: `{ submissionId, artifactPath }` |
+| `POST` | `/sandbox/deploy` | Trigger build pipeline — `{ submissionId, artifactPath }` |
+| `POST` | `/sandbox/stop/:id` | Stop a running container (watchdog handles cleanup) |
 
-### Submission Pipeline — Status Lifecycle
+### Telemetry Internal API
+
+Base URL: `http://localhost:4000` — called by bot workers only.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/health` | Telemetry liveness probe |
+| `POST` | `/events` | Single telemetry event |
+| `POST` | `/events/batch` | Batch of 50 telemetry events (preferred) |
+
+---
+
+## Submission Pipeline — Full Lifecycle
 
 ```
-queued → building → running    (happy path, ~30–90s depending on build time)
-queued → building → error      (compile failure, health timeout, Docker error)
-running → stopped              (manual stop via admin API — Phase 3)
+POST /submit
+  ↓ multer-s3 streams file to MinIO
+  ↓ Redis: submission:{id}:status = "queued"
+  ↓ PostgreSQL: submissions row inserted
+  ↓ POST /sandbox/deploy (fire-and-forget)
+
+Sandbox pipeline (async):
+  queued → building → (docker build) → (docker run) → (health poll) → running
+  any failure → error + submission.stopped published to Kafka
+
+On status = "running":
+  ↓ Kafka: submission.ready { submissionId, host, port }
+  ↓ Watchdog starts (background) — enforces MAX_RUNTIME_MS
+
+Bot Fleet (Kafka consumer):
+  ↓ Spawns BOT_COUNT worker threads per submission
+  ↓ Each worker fires Poisson-timed orders at container IP on sandbox-net
+  ↓ Batches 50 telemetry events → POST /events/batch to telemetry
+
+Telemetry Ingester:
+  ↓ HDR Histogram per submission (p50/p90/p99)
+  ↓ TPS counter (1s sliding window)
+  ↓ Flush every 1s → console log (Phase 3: TimescaleDB + Redis leaderboard)
+
+Watchdog:
+  ↓ container.wait() resolves on container exit (crash, OOM, or MAX_RUNTIME_MS)
+  ↓ Redis: status = "stopped"
+  ↓ Kafka: submission.stopped → bot fleet terminates workers
+  ↓ Container removed from Docker
+```
+
+**Status lifecycle:**
+```
+queued → building → running → stopped   (normal — ran for MAX_RUNTIME_MS)
+queued → building → error              (build failure, health timeout)
 ```
 
 ---
 
-## Postman Test Sequence (Phase 1 Verification)
+## Database Schema
 
-Run these in order after starting gateway and sandbox:
+### PostgreSQL (TimescaleDB)
 
-**1 — Health check**
-```
-GET http://localhost:3000/health
-→ 200: { "status": "ok", "uptime": 4.2 }
-```
+**`users`** — contestant registration
+| Column | Type | Description |
+|---|---|---|
+| `id` | TEXT PK | UUID v4 |
+| `username` | TEXT UNIQUE | Team/contestant handle |
+| `password_hash` | TEXT | bcrypt hash (10 rounds) |
+| `role` | TEXT | `'admin'` or `'contestant'` |
+| `created_at` | TIMESTAMPTZ | Registration timestamp |
 
-**2 — Get a JWT token**
-```
-POST http://localhost:3000/auth/login
-Content-Type: application/json
-{ "username": "admin", "password": "admin" }
-→ 200: { "token": "eyJhbG..." }
-```
+**`submissions`** — one row per upload
+| Column | Type | Description |
+|---|---|---|
+| `id` | TEXT PK | UUID v4 |
+| `contestant_id` | TEXT | Soft FK → `users.id` |
+| `language` | TEXT | `'cpp'`, `'rust'`, or `'go'` |
+| `artifact_path` | TEXT | MinIO key: `{submissionId}/{filename}` |
+| `status` | TEXT | `queued / building / running / stopped / error` |
+| `container_host` | TEXT | sandbox-net IP (set by sandbox) |
+| `container_port` | INT | Container port (set by sandbox) |
+| `submitted_at` | TIMESTAMPTZ | — |
 
-**3 — Upload a C++ zip file**
-```
-POST http://localhost:3000/submit
-Authorization: Bearer <token>
-Content-Type: multipart/form-data
-  file     → any .zip containing a .cpp file with a /health endpoint
-  language → cpp
-→ 202: { "submissionId": "uuid" }
-```
+**`metrics`** *(hypertable)* — 1 row per second per running submission
+| Column | Type | Description |
+|---|---|---|
+| `time` | TIMESTAMPTZ | Hypertable partition key |
+| `submission_id` | TEXT | Soft FK → `submissions.id` |
+| `latency_p50/90/99` | FLOAT | HDR histogram percentiles (ms) |
+| `tps` | FLOAT | Orders per second |
+| `correctness_rate` | FLOAT | Fill accuracy 0–100 |
+| `composite_score` | FLOAT | Weighted score (Phase 3) |
 
-**4 — Poll status (repeat every few seconds)**
-```
-GET http://localhost:3000/runs/<submissionId>
-Authorization: Bearer <token>
-→ { "status": "building" }   ← during docker build
-→ { "status": "running" }    ← container healthy, bots can fire
-```
+### Redis Key Patterns
 
-**5 — Verify container is running with isolation**
-```bash
-docker ps | grep submission-<submissionId>
-docker inspect submission-<id> | grep -E "Memory|ReadonlyRootfs|CapDrop|sandbox-net"
-```
+| Key | Type | Contents |
+|---|---|---|
+| `submission:{id}:status` | String | `queued / building / running / stopped / error` |
+| `submission:{id}:meta` | Hash | `contestantId, username, artifactPath, language, submittedAt` |
+| `leaderboard` | Sorted Set | member=submissionId, score=compositeScore (Phase 3) |
 
 ---
 
-## Verifying Infrastructure Directly
+## Verification Commands
 
-**TimescaleDB:**
+**Full stack health check:**
 ```bash
-# List all tables
+# All infra containers healthy
+docker compose -f infra/docker-compose.yml ps
+
+# Redis
+docker exec iicpc-redis redis-cli ping          # → PONG
+
+# TimescaleDB tables
 docker exec iicpc-timescale psql -U postgres -d iicpc -c "\dt"
 
-# Confirm metrics is a hypertable
-docker exec iicpc-timescale psql -U postgres -d iicpc -c \
-  "SELECT hypertable_name FROM timescaledb_information.hypertables;"
+# MinIO console
+# Open http://localhost:9001  →  minioadmin / minioadmin123
 ```
 
-**Redis:**
+**Test the auth + submit flow:**
 ```bash
-docker exec iicpc-redis redis-cli ping
-# → PONG
+# 1. Register
+curl -s -X POST http://localhost:3000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"team-alpha","password":"test123"}' | jq .
 
-# Check a submission status
-docker exec iicpc-redis redis-cli GET submission:<id>:status
-# → "running"
+# 2. Login
+curl -s -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"team-alpha","password":"test123"}' | jq .token
+
+# 3. Submit (replace TOKEN)
+curl -s -X POST http://localhost:3000/submit \
+  -H "Authorization: Bearer TOKEN" \
+  -F "file=@my-exchange.zip" \
+  -F "language=cpp" | jq .
+
+# 4. Poll status
+curl -s http://localhost:3000/runs/SUBMISSION_ID \
+  -H "Authorization: Bearer TOKEN" | jq .
+
+# 5. User's submission history
+curl -s http://localhost:3000/runs \
+  -H "Authorization: Bearer TOKEN" | jq .
 ```
 
-**MinIO console:**
-
-Open [http://localhost:9001](http://localhost:9001) → Login: `minioadmin` / `minioadmin123`
-
-Check the `submissions` bucket — uploaded zips appear as `{submissionId}/{filename}.zip`.
-
-**Drizzle Studio:**
+**Watch telemetry output (when bots are firing):**
 ```bash
-pnpm db:studio
-# → Open http://localhost:4983
+# Should print every ~1s when a submission is running:
+# [telemetry] abc12345  p50=2ms  p90=8ms  p99=23ms  TPS=847
+cd packages/telemetry && pnpm dev
 ```
 
 ---
@@ -364,3 +421,14 @@ docker compose -f infra/docker-compose.yml down
 # Stop and wipe all data (full reset)
 docker compose -f infra/docker-compose.yml down -v
 ```
+
+---
+
+## Database Commands
+
+| Command | What it does |
+|---|---|
+| `pnpm migrate` | Apply all pending migrations to TimescaleDB |
+| `pnpm db:generate` | Generate a new migration after changing `schema.ts` |
+| `pnpm db:studio` | Open Drizzle Studio at `localhost:4983` |
+| `pnpm db:push` | Push schema directly (dev only, skips migration file) |
