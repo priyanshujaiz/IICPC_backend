@@ -1,3 +1,9 @@
 services:
-  # Override if needed in future - empty for now
-  # You can add bind mounts here later for any custom dev services
+  # Dev overrides: mount source for hot-reload with tsx watch
+  telemetry:
+    volumes:
+      - ../packages/telemetry/src:/app/packages/telemetry/src:ro
+
+  leaderboard:
+    volumes:
+      - ../packages/leaderboard/src:/app/packages/leaderboard/src:ro

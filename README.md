@@ -2,7 +2,7 @@
 
 **Distributed Benchmarking & Hosting Platform** — IICPC Summer Hackathon 2026.
 
-Contestants upload their trading engine code (C++, Rust, Go). The platform containerises it in a secure sandbox, fires thousands of distributed bots at it, captures latency/throughput/correctness telemetry, and streams live scores to a real-time leaderboard.
+Contestants upload their trading engine code (C++, Rust, Go). The platform containerises it in a secure sandbox, fires hundreds of distributed bots at it, captures latency/throughput/correctness telemetry, computes composite scores in real-time, and streams live rankings to a leaderboard via SSE.
 
 ---
 
@@ -11,14 +11,28 @@ Contestants upload their trading engine code (C++, Rust, Go). The platform conta
 | Phase | Service | Status | Notes |
 |---|---|---|---|
 | **Phase 0** | `packages/shared` | ✅ Complete | Types, Kafka helpers, Drizzle schema, config |
-| **Phase 0** | `infra/` + migrations | ✅ Complete | Docker Compose, TimescaleDB migrations |
-| **Phase 1** | `packages/gateway` | ✅ Complete | DB-backed JWT auth, MinIO upload, Redis status, sandbox trigger |
-| **Phase 1** | `packages/sandbox` | ✅ Complete | Build pipeline, dual-NIC isolation, container watchdog, max runtime |
-| **Phase 2** | `packages/bot-fleet` | ✅ Complete | worker_threads, Poisson timing, circuit breaker, batch telemetry |
-| **Phase 2** | `packages/telemetry` | ✅ Complete | Fastify, HDR histogram, TPS counter, 1s flush cycle |
-| **Phase 3** | `packages/leaderboard` | 🔜 Next | SSE stream, Redis sorted set, composite score |
-| **Phase 4** | `frontend/` | ⬜ Pending | React, Recharts, live dashboard |
+| **Phase 0** | `infra/` + migrations | ✅ Complete | Docker Compose (9 services), TimescaleDB migrations |
+| **Phase 1** | `packages/gateway` | ✅ Complete | DB-backed JWT auth, MinIO upload, Redis status, sandbox trigger, admin stop |
+| **Phase 1** | `packages/sandbox` | ✅ Complete | Build pipeline, dual-NIC isolation, watchdog, max runtime, pre-warm images, container stop+cleanup |
+| **Phase 2** | `packages/bot-fleet` | ✅ Complete | 20 workers/submission, Poisson timing, circuit breaker, batch telemetry |
+| **Phase 2** | `packages/telemetry` | ✅ Complete | Fastify, HDR histogram, TPS counter, reference engine, 1s flush cycle |
+| **Phase 3** | `packages/leaderboard` | ✅ Complete | SSE stream, Redis sorted set, composite scoring, `/stats` + `/scores/snapshot` APIs |
+| **Phase 4** | `frontend/` | ✅ Complete | React + Vite, Recharts, live dashboard, leaderboard, submit page, analytics |
 | **Phase 5** | `infra/k8s/` | ⬜ Pending | Kubernetes manifests, HPA |
+
+---
+
+## Scoring Formula
+
+```
+compositeScore = (40% × latencyScore) + (40% × throughputScore) + (20% × correctnessScore)
+```
+
+- **Latency (40%)** — p99 round-trip time. Lower is better. Normalized across all active submissions.
+- **Throughput (40%)** — Orders acknowledged per second (TPS). Higher is better.
+- **Correctness (20%)** — MARKET order fill accuracy. `(correct fills / total market orders) × 100`.
+
+Scores update every **1 second** and stream to the leaderboard via SSE.
 
 ---
 
@@ -40,13 +54,13 @@ iicpc-platform/
 │   ├── shared/                          # @iicpc/shared — contract layer
 │   │   └── src/
 │   │       ├── types.ts                 # Domain interfaces: Submission, TelemetryEvent, LiveScore
-│   │       ├── schema.ts                # Drizzle ORM: users + submissions + metrics tables
+│   │       ├── schema.ts               # Drizzle ORM: users + submissions + metrics tables
 │   │       ├── db.ts                    # createDb(pool) — typed Drizzle client factory
-│   │       ├── topics.ts                # Kafka topic constants
-│   │       ├── kafka.ts                 # createProducer() / createConsumer() factories
-│   │       ├── errors.ts                # SandboxBuildError, ContainerTimeoutError
-│   │       ├── config.ts                # getEnv() / getEnvNumber() — fail-fast helpers
-│   │       └── index.ts                 # Barrel export
+│   │       ├── topics.ts               # Kafka topic constants
+│   │       ├── kafka.ts                # createProducer() / createConsumer() factories
+│   │       ├── errors.ts               # SandboxBuildError, ContainerTimeoutError
+│   │       ├── config.ts               # getEnv() / getEnvNumber() — fail-fast helpers
+│   │       └── index.ts                # Barrel export
 │   │
 │   ├── gateway/                         # API Gateway — public HTTP entry point (port 3000)
 │   │   ├── Dockerfile
@@ -61,16 +75,16 @@ iicpc-platform/
 │   │           ├── health.ts            # GET  /health
 │   │           ├── auth.ts              # POST /auth/register + POST /auth/login (DB-backed)
 │   │           ├── submit.ts            # POST /submit — MinIO upload + Redis + PostgreSQL + sandbox
-│   │           └── runs.ts              # GET  /runs/:id (Redis) + GET /runs (PostgreSQL history)
+│   │           └── runs.ts              # GET /runs, GET /runs/:id, DELETE /runs/:id (admin stop)
 │   │
 │   ├── sandbox/                         # Sandbox Engine — container builder (port 3001, internal)
 │   │   ├── Dockerfile
 │   │   └── src/
-│   │       ├── server.ts                # Express: POST /sandbox/deploy + POST /sandbox/stop/:id
+│   │       ├── server.ts                # POST /sandbox/deploy, POST /sandbox/stop, GET /sandbox/status
 │   │       ├── pipeline.ts              # Full build pipeline + watchdog launch
 │   │       ├── watchdog.ts              # Container lifecycle: detects exit, enforces MAX_RUNTIME_MS
 │   │       ├── minio-client.ts          # Download artifact from MinIO → /tmp/iicpc/{id}/
-│   │       ├── builder.ts               # Detect language, build Docker image via Dockerode
+│   │       ├── builder.ts               # Language detection, multi-stage Dockerfiles, preWarmImages()
 │   │       ├── runner.ts                # createContainer() with full isolation, get sandbox-net IP
 │   │       ├── health-poller.ts         # Poll GET /health every 2s, 30s timeout
 │   │       └── publisher.ts             # Kafka: publish submission.ready / submission.stopped
@@ -82,23 +96,51 @@ iicpc-platform/
 │   │       ├── bot-worker.ts            # worker_thread: Poisson loop + circuit breaker + batch telemetry
 │   │       └── scenario.ts              # Order generation: 60% LIMIT / 25% MARKET / 15% CANCEL
 │   │
-│   └── telemetry/                       # Telemetry Ingester — metrics collector (port 4000, internal)
+│   ├── telemetry/                       # Telemetry Ingester — metrics collector (port 4000, internal)
+│   │   ├── Dockerfile
+│   │   └── src/
+│   │       ├── server.ts                # Fastify: POST /events + POST /events/batch + GET /health
+│   │       ├── histogram.ts             # HDR Histogram per submission (O(1) p50/p90/p99)
+│   │       ├── tps-counter.ts           # Sliding 1s window TPS counter per submission
+│   │       ├── reference-engine.ts      # Per-submission MARKET order fill validator
+│   │       ├── scorer.ts                # compositeScore = 0.4×latency + 0.4×throughput + 0.2×correctness
+│   │       ├── flush.ts                 # 1s cycle: histogram → scorer → TimescaleDB + Redis leaderboard
+│   │       └── routes/
+│   │           └── events.ts            # Route handlers for single + batch telemetry events
+│   │
+│   └── leaderboard/                     # Leaderboard Service — live scores (port 4001)
 │       ├── Dockerfile
 │       └── src/
-│           ├── server.ts                # Fastify: POST /events + POST /events/batch + GET /health
-│           ├── histogram.ts             # HDR Histogram per submission (O(1) p50/p90/p99)
-│           ├── tps-counter.ts           # Sliding 1s window TPS counter per submission
-│           ├── flush.ts                 # setInterval(1000ms): log percentiles to console (Phase 3: DB write)
+│           ├── app.ts                   # Express: helmet → cors → all routes
+│           ├── server.ts                # HTTP listen + Redis seed on startup
+│           ├── redis.ts                 # Read-only Redis client
+│           ├── db.ts                    # pg Pool → TimescaleDB (read-only)
 │           └── routes/
-│               └── events.ts            # Route handlers for single + batch telemetry events
+│               ├── health.ts            # GET  /health
+│               ├── snapshot.ts          # GET  /scores/snapshot — one-shot leaderboard (team names + scores)
+│               ├── stream.ts            # GET  /scores/stream — SSE push every 1s
+│               ├── metrics.ts           # GET  /metrics/:id — time-series for charts
+│               └── stats.ts             # GET  /scores/stats — platform-wide KPIs for dashboard
+│
+├── frontend/                            # React + Vite SPA (port 5173 dev)
+│   ├── vite.config.ts                   # Dev proxy: /api→gateway, /scores→leaderboard, /metrics→leaderboard
+│   └── src/
+│       ├── context/AuthContext.tsx       # JWT auth provider (login, register, logout)
+│       └── pages/
+│           ├── LoginPage.tsx            # Split-screen premium login
+│           ├── RegisterPage.tsx         # Matching registration page
+│           ├── DashboardPage.tsx        # KPI cards (live /stats) + time-series charts
+│           ├── LeaderboardPage.tsx      # Real-time SSE table (team names, language badges, sparklines)
+│           ├── SubmitPage.tsx           # Language select → file upload → progress tracker → stop button
+│           ├── MyAnalyticsPage.tsx      # Per-submission deep-dive charts
+│           ├── ComparePage.tsx          # Side-by-side submission comparison
+│           └── BotActivityPage.tsx      # Live bot fleet monitoring
 │
 ├── infra/
-│   ├── docker-compose.yml               # All 8 services: gateway, sandbox, bot-fleet, telemetry,
-│   │                                    #   redpanda, timescale, redis, minio
-│   ├── docker-compose.override.yml      # Dev overrides (hot-reload mounts)
+│   ├── docker-compose.yml               # All 9 services + 2 networks + 2 volumes
 │   └── drizzle/                         # Drizzle-managed SQL migrations
 │       ├── 0000_*.sql                   # CREATE TABLE submissions + metrics
-│       ├── 0001_*.sql                   # create_hypertable() + indexes + users table (generated)
+│       ├── 0001_*.sql                   # create_hypertable() + indexes
 │       └── 0002_users.sql               # users table + idx_users_username
 │
 ├── scripts/
@@ -106,8 +148,10 @@ iicpc-platform/
 │   └── wait-for-infra.sh                # Poll Docker health endpoints
 │
 └── docs/
+    ├── exchange-api.md                  # ⭐ Contestant API contract (what your code must implement)
     ├── blueprint.md                     # Full system architecture blueprint
     ├── database-design.md               # Three-store schema (TimescaleDB · Redis · MinIO)
+    ├── IIcpc_hackathon.md               # Hackathon requirements and rules
     └── phase-planner.md                 # Phase-by-phase engineering roadmap
 ```
 
@@ -115,11 +159,9 @@ iicpc-platform/
 
 ## Network Architecture
 
-The platform uses **two Docker networks** to enforce isolation:
-
 ```
 ┌──────────────────────────── iicpc-network (bridge) ────────────────────────────────────┐
-│  gateway   sandbox   bot-fleet   telemetry   redpanda   timescale   redis   minio       │
+│  gateway  sandbox  bot-fleet  telemetry  leaderboard  redpanda  timescale  redis  minio │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────── sandbox-net (bridge, internal=true) ───────────────────────────────┐
@@ -130,7 +172,7 @@ The platform uses **two Docker networks** to enforce isolation:
 
 **Dual-NIC services:** Both `sandbox` and `bot-fleet` attach to both networks.
 - They reach Redis / MinIO / Redpanda / Telemetry over `iicpc-network`
-- They reach submission containers over `sandbox-net` using the container's internal IP directly
+- They reach submission containers over `sandbox-net` using the container's internal IP
 
 ---
 
@@ -150,18 +192,25 @@ cp .env.example .env
 
 Defaults in `.env.example` work as-is for local development.
 
-### 3. Start all infrastructure containers
+### 3. Start everything with Docker Compose
 
 ```bash
-docker compose -f infra/docker-compose.yml up -d
+docker compose -f infra/docker-compose.yml up -d --build
 ```
 
-| Container | Image | Port | Purpose |
-|---|---|---|---|
-| `iicpc-redpanda` | redpandadata/redpanda | `19092` | Kafka-compatible message broker |
-| `iicpc-timescale` | timescale/timescaledb-pg15 | `5433` | Time-series metrics + user/submission store |
-| `iicpc-redis` | redis:7.2-alpine | `6379` | Live leaderboard + submission status |
-| `iicpc-minio` | minio/minio | `9000/9001` | Object store for uploaded artifacts |
+This starts all 9 services:
+
+| Container | Port | Purpose |
+|---|---|---|
+| `iicpc-gateway` | `3000` | Public API — auth, submit, runs |
+| `iicpc-sandbox` | `3001` | Container builder + stop/status (internal) |
+| `iicpc-bot-fleet` | — | Kafka-driven load generator (20 bots/submission) |
+| `iicpc-telemetry` | `4000` | Metrics ingester + scorer (internal) |
+| `iicpc-leaderboard` | `4001` | SSE stream + /stats + /scores/snapshot |
+| `iicpc-redpanda` | `19092` | Kafka-compatible message broker |
+| `iicpc-timescale` | `5433` | TimescaleDB — metrics + users + submissions |
+| `iicpc-redis` | `6379` | Live leaderboard + submission status |
+| `iicpc-minio` | `9000/9001` | Object store for uploaded code archives |
 
 ### 4. Run database migrations
 
@@ -169,39 +218,51 @@ docker compose -f infra/docker-compose.yml up -d
 pnpm migrate
 ```
 
-Creates all three tables: `submissions`, `metrics` (hypertable), `users`.
+### 5. Start the frontend (dev mode)
 
 ```bash
-# Verify
-docker exec iicpc-timescale psql -U postgres -d iicpc -c "\dt"
-#  Schema |    Name     | Type  |  Owner
-# --------+-------------+-------+----------
-#  public | metrics     | table | postgres
-#  public | submissions | table | postgres
-#  public | users       | table | postgres
+cd frontend && pnpm dev
 ```
 
-### 5. Build the shared package
+Open `http://localhost:5173` — register an account and submit code.
 
-```bash
-pnpm build
+---
+
+## Contestant Exchange API
+
+> **Full specification:** [`docs/exchange-api.md`](docs/exchange-api.md)
+
+Your trading engine must expose two HTTP endpoints on port `8080`:
+
+### `GET /health` — Health check
+```json
+{ "status": "ok" }
+```
+Must return 200 within 30 seconds of container start.
+
+### `POST /order` — Process an order
+Bots send ~300 orders/sec. Three order types:
+
+```
+60% LIMIT   — { orderId, type:"LIMIT",  side, price, quantity }
+25% MARKET  — { orderId, type:"MARKET", side, quantity }
+15% CANCEL  — { orderId, type:"CANCEL", cancelOrderId }
 ```
 
-### 6. Run services in development
-
-```bash
-# Terminal 1 — Gateway (port 3000)
-cd packages/gateway && pnpm dev
-
-# Terminal 2 — Sandbox (port 3001, internal)
-cd packages/sandbox && pnpm dev
-
-# Terminal 3 — Telemetry (port 4000, internal)
-cd packages/telemetry && pnpm dev
-
-# Terminal 4 — Bot Fleet (no port, Kafka-driven)
-cd packages/bot-fleet && pnpm dev
+Expected response:
+```json
+{ "orderId": "...", "status": "filled", "filledQty": 17 }
 ```
+
+### Container Constraints
+| Resource | Limit |
+|---|---|
+| Memory | 512 MB (hard cap, OOM = kill) |
+| CPU | 1 vCPU |
+| Filesystem | Read-only |
+| Network | Isolated (no internet) |
+| Max Duration | 10 minutes (auto-stopped) |
+| Process Limit | 100 PIDs |
 
 ---
 
@@ -220,11 +281,12 @@ cd packages/bot-fleet && pnpm dev
 | `MINIO_SECRET_KEY` | `minioadmin123` | MinIO secret key |
 | `TIMESCALE_URL` | `postgres://postgres:postgres@localhost:5433/iicpc` | TimescaleDB connection |
 | `FRONTEND_URL` | `http://localhost:5173` | Allowed CORS origin |
-| `BOT_COUNT` | `5` | Bot worker threads spawned per submission |
-| `BOT_LAMBDA` | `10` | Poisson rate — target orders/sec per bot |
+| `BOT_COUNT` | `20` | Bot worker threads spawned per submission |
+| `BOT_LAMBDA` | `15` | Poisson rate — target orders/sec per bot |
 | `TELEMETRY_URL` | `http://localhost:4000` | Telemetry ingester URL (bot-fleet → telemetry) |
 | `TELEMETRY_PORT` | `4000` | Telemetry Fastify listen port |
-| `MAX_RUNTIME_MS` | `600000` | Max time a submission container runs (10 min default) |
+| `LEADERBOARD_PORT` | `4001` | Leaderboard HTTP listen port |
+| `MAX_RUNTIME_MS` | `600000` | Max time a submission container runs (10 min) |
 
 > **Docker Compose:** Internal service URLs are automatically overridden via the `environment:` block in `docker-compose.yml`. No manual change needed.
 
@@ -238,37 +300,36 @@ Base URL: `http://localhost:3000`
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| `GET` | `/health` | None | Liveness probe — `{ status: 'ok', uptime }` |
-| `POST` | `/auth/register` | None | Register a contestant — `{ username, password }` → `{ token, userId, username, role }` |
+| `GET` | `/health` | None | Liveness probe |
+| `POST` | `/auth/register` | None | Register — `{ username, password }` → `{ token, userId, username, role }` |
 | `POST` | `/auth/login` | None | Login — `{ username, password }` → `{ token, userId, username, role }` |
 
 ### Submissions
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| `POST` | `/submit` | Bearer JWT | Upload code archive → MinIO + Redis + PostgreSQL + trigger sandbox |
-| `GET` | `/runs/:id` | Bearer JWT | Real-time submission status from Redis |
-| `GET` | `/runs` | Bearer JWT | All submissions for the authenticated user (PostgreSQL) |
+| `POST` | `/submit` | Bearer JWT | Upload code archive (multipart) → triggers sandbox build |
+| `GET` | `/runs/:id` | Bearer JWT | Real-time status from Redis |
+| `GET` | `/runs` | Bearer JWT | All submissions for current user (PostgreSQL) |
+| `DELETE` | `/runs/:id` | Bearer JWT | **Stop submission** — kills container, drains bots, cleans up |
 
-### Sandbox Internal API
+### Leaderboard API (port 4001)
 
-Base URL: `http://localhost:3001` — not exposed externally, called by gateway only.
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/scores/snapshot` | One-shot leaderboard (team names, scores, language, status) |
+| `GET` | `/scores/stream` | SSE stream — pushes updated leaderboard every 1s |
+| `GET` | `/scores/stats` | Platform-wide KPIs (activeSubmissions, totalBots, platformTps, avgCorrectness) |
+| `GET` | `/metrics/:id` | Time-series data for a specific submission |
+
+### Sandbox Internal API (port 3001)
 
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/health` | Sandbox liveness probe |
 | `POST` | `/sandbox/deploy` | Trigger build pipeline — `{ submissionId, artifactPath }` |
-| `POST` | `/sandbox/stop/:id` | Stop a running container (watchdog handles cleanup) |
-
-### Telemetry Internal API
-
-Base URL: `http://localhost:4000` — called by bot workers only.
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/health` | Telemetry liveness probe |
-| `POST` | `/events` | Single telemetry event |
-| `POST` | `/events/batch` | Batch of 50 telemetry events (preferred) |
+| `POST` | `/sandbox/stop` | Stop + remove container + image — `{ submissionId }` |
+| `GET` | `/sandbox/status` | List all running submission containers |
 
 ---
 
@@ -277,39 +338,46 @@ Base URL: `http://localhost:4000` — called by bot workers only.
 ```
 POST /submit
   ↓ multer-s3 streams file to MinIO
-  ↓ Redis: submission:{id}:status = "queued"
+  ↓ Redis: submission:{id}:status = "queued", meta hash set
   ↓ PostgreSQL: submissions row inserted
   ↓ POST /sandbox/deploy (fire-and-forget)
 
 Sandbox pipeline (async):
-  queued → building → (docker build) → (docker run) → (health poll) → running
+  queued → building → (detect language) → (multi-stage docker build) → (docker run) → (health poll) → running
   any failure → error + submission.stopped published to Kafka
 
 On status = "running":
   ↓ Kafka: submission.ready { submissionId, host, port }
-  ↓ Watchdog starts (background) — enforces MAX_RUNTIME_MS
+  ↓ Watchdog starts (background) — enforces MAX_RUNTIME_MS (10 min)
 
 Bot Fleet (Kafka consumer):
-  ↓ Spawns BOT_COUNT worker threads per submission
-  ↓ Each worker fires Poisson-timed orders at container IP on sandbox-net
+  ↓ Spawns 20 worker threads per submission
+  ↓ Each worker fires Poisson-timed orders (~15/sec each = ~300 TPS total)
   ↓ Batches 50 telemetry events → POST /events/batch to telemetry
 
-Telemetry Ingester:
-  ↓ HDR Histogram per submission (p50/p90/p99)
+Telemetry Ingester (1s flush cycle):
+  ↓ HDR Histogram per submission → p50/p90/p99
   ↓ TPS counter (1s sliding window)
-  ↓ Flush every 1s → console log (Phase 3: TimescaleDB + Redis leaderboard)
+  ↓ Reference engine validates MARKET order fills → correctness rate
+  ↓ Scorer normalizes across all active submissions → compositeScore
+  ↓ TimescaleDB INSERT metrics row
+  ↓ Redis ZADD leaderboard + SET score JSON
 
-Watchdog:
-  ↓ container.wait() resolves on container exit (crash, OOM, or MAX_RUNTIME_MS)
-  ↓ Redis: status = "stopped"
-  ↓ Kafka: submission.stopped → bot fleet terminates workers
-  ↓ Container removed from Docker
+Leaderboard (SSE):
+  ↓ Every 1s: ZREVRANGEBYSCORE → enriches with team name + language + status
+  ↓ Pushes to all connected frontend clients via Server-Sent Events
+
+Stopping (user-initiated or auto-timeout):
+  ↓ DELETE /runs/:id → Redis fleet:stop key → POST /sandbox/stop
+  ↓ Container stopped + removed + image deleted (disk freed)
+  ↓ Kafka submission.stopped → bot-fleet terminates all workers
+  ↓ Final score preserved in leaderboard
 ```
 
 **Status lifecycle:**
 ```
-queued → building → running → stopped   (normal — ran for MAX_RUNTIME_MS)
-queued → building → error              (build failure, health timeout)
+queued → building → running → stopped   (normal — timeout or user stop)
+queued → building → error               (build failure, health timeout, OOM)
 ```
 
 ---
@@ -322,7 +390,7 @@ queued → building → error              (build failure, health timeout)
 | Column | Type | Description |
 |---|---|---|
 | `id` | TEXT PK | UUID v4 |
-| `username` | TEXT UNIQUE | Team/contestant handle |
+| `username` | TEXT UNIQUE | Contestant handle |
 | `password_hash` | TEXT | bcrypt hash (10 rounds) |
 | `role` | TEXT | `'admin'` or `'contestant'` |
 | `created_at` | TIMESTAMPTZ | Registration timestamp |
@@ -335,27 +403,31 @@ queued → building → error              (build failure, health timeout)
 | `language` | TEXT | `'cpp'`, `'rust'`, or `'go'` |
 | `artifact_path` | TEXT | MinIO key: `{submissionId}/{filename}` |
 | `status` | TEXT | `queued / building / running / stopped / error` |
-| `container_host` | TEXT | sandbox-net IP (set by sandbox) |
-| `container_port` | INT | Container port (set by sandbox) |
-| `submitted_at` | TIMESTAMPTZ | — |
+| `submitted_at` | TIMESTAMPTZ | Upload timestamp |
+| `stopped_at` | TIMESTAMPTZ | When stopped (null if still running) |
 
 **`metrics`** *(hypertable)* — 1 row per second per running submission
 | Column | Type | Description |
 |---|---|---|
 | `time` | TIMESTAMPTZ | Hypertable partition key |
 | `submission_id` | TEXT | Soft FK → `submissions.id` |
-| `latency_p50/90/99` | FLOAT | HDR histogram percentiles (ms) |
+| `latency_p50/p90/p99` | FLOAT | HDR histogram percentiles (ms) |
 | `tps` | FLOAT | Orders per second |
 | `correctness_rate` | FLOAT | Fill accuracy 0–100 |
-| `composite_score` | FLOAT | Weighted score (Phase 3) |
+| `composite_score` | FLOAT | Weighted composite (0–100) |
+| `total_orders` | INT | Orders processed in this window |
+| `correct_fills` | INT | Correct MARKET fills |
+| `total_fills` | INT | Total MARKET orders attempted |
 
 ### Redis Key Patterns
 
 | Key | Type | Contents |
 |---|---|---|
 | `submission:{id}:status` | String | `queued / building / running / stopped / error` |
-| `submission:{id}:meta` | Hash | `contestantId, username, artifactPath, language, submittedAt` |
-| `leaderboard` | Sorted Set | member=submissionId, score=compositeScore (Phase 3) |
+| `submission:{id}:meta` | Hash | `contestantId, username, artifactPath, language, submittedAt, containerId` |
+| `submission:{id}:score` | String (JSON) | `{ p50, p90, p99, tps, correctnessRate, compositeScore }` |
+| `leaderboard` | Sorted Set | member=submissionId, score=compositeScore |
+| `fleet:stop:{id}` | String | `"1"` — signals bots to drain (30s TTL) |
 
 ---
 
@@ -363,51 +435,39 @@ queued → building → error              (build failure, health timeout)
 
 **Full stack health check:**
 ```bash
-# All infra containers healthy
 docker compose -f infra/docker-compose.yml ps
 
-# Redis
-docker exec iicpc-redis redis-cli ping          # → PONG
-
-# TimescaleDB tables
+# All 9 services should show "Up" or "Up (healthy)"
+docker exec iicpc-redis redis-cli ping                     # → PONG
 docker exec iicpc-timescale psql -U postgres -d iicpc -c "\dt"
-
-# MinIO console
-# Open http://localhost:9001  →  minioadmin / minioadmin123
+curl http://localhost:3000/health                           # gateway
+curl http://localhost:4001/health                           # leaderboard
+curl http://localhost:4001/scores/stats                     # platform KPIs
 ```
 
-**Test the auth + submit flow:**
+**Test the full flow:**
 ```bash
 # 1. Register
 curl -s -X POST http://localhost:3000/auth/register \
   -H "Content-Type: application/json" \
   -d '{"username":"team-alpha","password":"test123"}' | jq .
 
-# 2. Login
-curl -s -X POST http://localhost:3000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"team-alpha","password":"test123"}' | jq .token
-
-# 3. Submit (replace TOKEN)
+# 2. Submit (replace TOKEN)
 curl -s -X POST http://localhost:3000/submit \
   -H "Authorization: Bearer TOKEN" \
   -F "file=@my-exchange.zip" \
   -F "language=cpp" | jq .
 
-# 4. Poll status
+# 3. Poll status
 curl -s http://localhost:3000/runs/SUBMISSION_ID \
   -H "Authorization: Bearer TOKEN" | jq .
 
-# 5. User's submission history
-curl -s http://localhost:3000/runs \
-  -H "Authorization: Bearer TOKEN" | jq .
-```
+# 4. Watch leaderboard
+curl -N http://localhost:4001/scores/stream
 
-**Watch telemetry output (when bots are firing):**
-```bash
-# Should print every ~1s when a submission is running:
-# [telemetry] abc12345  p50=2ms  p90=8ms  p99=23ms  TPS=847
-cd packages/telemetry && pnpm dev
+# 5. Stop a submission
+curl -s -X DELETE http://localhost:3000/runs/SUBMISSION_ID \
+  -H "Authorization: Bearer TOKEN" | jq .
 ```
 
 ---

@@ -41,35 +41,88 @@ export function generateDockerfile(language: Language): string {
     switch (language) {
         case 'cpp':
             return [
-                'FROM gcc:12',
+                '# Stage 1: Compile',
+                'FROM gcc:12 AS builder',
                 'WORKDIR /app',
                 'COPY . .',
-                '# Find and compile the first .cpp file found',
-                'RUN find . -name "*.cpp" | head -1 | xargs -I{} g++ -O2 -o exchange {}',
+                'RUN find . -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" | head -1 | xargs -I{} g++ -O2 -o exchange {}',
+                '',
+                '# Stage 2: Minimal runtime',
+                'FROM debian:bookworm-slim',
+                'WORKDIR /app',
+                'COPY --from=builder /app/exchange /app/exchange',
                 'EXPOSE 8080',
-                'CMD ["./exchange"]',
+                'CMD ["/app/exchange"]',
             ].join('\n');
         case 'rust':
             return [
-                'FROM rust:1.75-alpine',
+                '# Stage 1: Compile',
+                'FROM rust:1.75-alpine AS builder',
                 'RUN apk add --no-cache musl-dev',
                 'WORKDIR /app',
                 'COPY . .',
                 'RUN cargo build --release',
-                'RUN cp target/release/$(cargo metadata --no-deps --format-version 1 | python3 -c "import sys,json; print(json.load(sys.stdin)[\'packages\'][0][\'name\'])") ./exchange 2>/dev/null || cp target/release/* ./exchange',
+                'RUN cp $(cargo metadata --no-deps --format-version 1 | python3 -c "import sys,json; print(json.load(sys.stdin)[\'packages\'][0][\'name\'])") ./exchange 2>/dev/null || mv target/release/$(ls target/release/ | grep -v \'.\' | head -1) ./exchange',
+                '',
+                '# Stage 2: Minimal runtime',
+                'FROM alpine:3.19',
+                'WORKDIR /app',
+                'COPY --from=builder /app/exchange /app/exchange',
                 'EXPOSE 8080',
-                'CMD ["./exchange"]',
+                'CMD ["/app/exchange"]',
             ].join('\n');
         case 'go':
             return [
-                'FROM golang:1.22-alpine',
+                '# Stage 1: Compile',
+                'FROM golang:1.22-alpine AS builder',
                 'WORKDIR /app',
                 'COPY . .',
-                'RUN go build -o exchange .',
+                'RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o exchange .',
+                '',
+                '# Stage 2: Minimal runtime (scratch = no OS)',
+                'FROM scratch',
+                'COPY --from=builder /app/exchange /exchange',
                 'EXPOSE 8080',
-                'CMD ["./exchange"]',
+                'CMD ["/exchange"]',
             ].join('\n');
     }
+}
+
+/**
+ * Pre-pull all base images at sandbox startup.
+ * Prevents the first submission from waiting 1–3 minutes for Docker Hub pulls.
+ * Safe to call multiple times — skips images already in the local cache.
+ */
+export async function preWarmImages(): Promise<void> {
+    const BASE_IMAGES = ['gcc:12', 'rust:1.75-alpine', 'golang:1.22-alpine', 'debian:bookworm-slim', 'alpine:3.19'];
+
+    console.log('[sandbox] pre-warming base images...');
+
+    for (const image of BASE_IMAGES) {
+        try {
+            const existing = await docker.listImages({ filters: { reference: [image] } });
+            if (existing.length > 0) {
+                console.log(`[sandbox] pre-warm: ${image} already cached ✓`);
+                continue;
+            }
+            console.log(`[sandbox] pre-warm: pulling ${image}...`);
+            const stream = await docker.pull(image);
+            await new Promise<void>((resolve, reject) => {
+                docker.modem.followProgress(
+                    stream,
+                    (err: Error | null) => err ? reject(err) : resolve(),
+                    (event: { status?: string }) => {
+                        if (event.status) process.stdout.write(`[docker-pull:${image}] ${event.status}\n`);
+                    }
+                );
+            });
+            console.log(`[sandbox] pre-warm: ${image} ready ✓`);
+        } catch (err) {
+            // Non-fatal: warn but continue — image will be pulled on first use
+            console.warn(`[sandbox] pre-warm failed for ${image}:`, (err as Error).message);
+        }
+    }
+    console.log('[sandbox] all base images ready');
 }
 
 /**

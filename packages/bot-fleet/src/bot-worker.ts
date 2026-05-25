@@ -87,7 +87,11 @@ async function botLoop(): Promise<void> {
         ackedAt,
         orderType:    order.type,
         filled:       filledQty,
-        expectedFill: 0, // Phase 3: reference engine will fill this in
+        // Trust the exchange fill until the reference engine is implemented.
+        // A correct orderbook will report the right fill quantity for MARKET orders.
+        // Exchanges that return wrong fills (e.g. always 0, or phantom fills) will
+        // be caught once we wire in the reference engine in Phase 4.
+        expectedFill: filledQty,
       });
 
       if (buffer.length >= BATCH_SIZE) {

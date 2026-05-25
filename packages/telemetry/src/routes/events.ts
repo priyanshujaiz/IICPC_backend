@@ -3,14 +3,19 @@ import type { TelemetryEvent } from '@iicpc/shared';
 
 import { recordsLatency } from "../histogram.js";
 import { recordEvent } from "../tps-counter.js";
+import { getOrCreateEngine } from "../reference-engine.js";
 
 /**
  * Processes a single telemetry event — records latency + increments TPS counter.
+ * For MARKET orders, also validates fills against the reference engine.
  */
 function ingest(event: TelemetryEvent): void {
   const latencyMs = event.ackedAt - event.sentAt;
   recordsLatency(event.submissionId, latencyMs);
   recordEvent(event.submissionId);
+
+  // Phase 3: validate fill correctness via in-process reference engine
+  getOrCreateEngine(event.submissionId).processEvent(event);
 }
 
 export async function eventsRoutes(fastify: FastifyInstance): Promise<void> {
