@@ -6,6 +6,9 @@ import { v4 as uuid } from 'uuid';
 import Redis from 'ioredis';
 import { getEnv } from '@iicpc/shared';
 import { requireAuth } from '../middleware/auth.js';
+import { submissions } from '@iicpc/shared';
+import { db } from '../db.js';
+
 
 export const submitRouter:Router = Router();
 const redis = new Redis(getEnv('REDIS_URL'));
@@ -51,30 +54,42 @@ const upload = multer({
 submitRouter.post('/', requireAuth, upload.single('file'), async (req, res) => {
   const submissionId: string = (req as any).submissionId;
   const artifactPath = (req.file as Express.MulterS3.File).key;
-  const contestantId = req.user!.sub;
+  const language     = (req.body.language ?? 'cpp') as 'cpp' | 'rust' | 'go';
 
-  // Write initial status and metadata to Redis
+  const { userId, username } = req.user!;
+
+  // ── Write to Redis (fast path — polled by GET /runs/:id) ─────────────────
   await redis.set(`submission:${submissionId}:status`, 'queued');
   await redis.hset(`submission:${submissionId}:meta`, {
-    contestantId,
+    contestantId:  userId,
+    username,
     artifactPath,
-    submittedAt: Date.now().toString(),
-    language: req.body.language ?? 'unknown',
+    submittedAt:   Date.now().toString(),
+    language,
   });
 
-  // ── Trigger the sandbox pipeline ───────────────────────────────────────────
-  // Fire-and-forget: gateway returns 202 immediately.
-  // If sandbox is temporarily down, submission stays 'queued' in Redis and the
-  // error is logged. Client can poll GET /runs/:id to track status.
+  // ── Write to PostgreSQL (persistent — queried by GET /runs) ───────────────
+  await db.insert(submissions).values({
+    id:           submissionId,
+    contestantId: userId,
+    language,
+    artifactPath,
+    status:       'queued',
+  });
+
+  console.log(`[gateway] submission ${submissionId} created for user ${username} (${userId})`);
+
+  // ── Trigger sandbox pipeline (fire-and-forget) ────────────────────────────
   const sandboxUrl = getEnv('SANDBOX_URL');
   fetch(`${sandboxUrl}/sandbox/deploy`, {
-    method: 'POST',
+    method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ submissionId, artifactPath }),
+    body:    JSON.stringify({ submissionId, artifactPath }),
   }).catch((err: Error) => {
     console.error('[gateway] failed to trigger sandbox for', submissionId, ':', err.message);
   });
 
-  res.status(202).json({ submissionId });
+  return res.status(202).json({ submissionId });
 });
+
 

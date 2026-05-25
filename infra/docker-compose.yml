@@ -13,20 +13,24 @@ services:
       - ../.env                                    # JWT_SECRET, ADMIN_* from root .env
     environment:
       PORT: "3000"
-      REDIS_URL: redis://redis:6379                # internal DNS — not localhost
-      MINIO_ENDPOINT: http://minio:9000            # internal DNS — not localhost
+      TIMESCALE_URL: postgres://postgres:postgres@timescale:5432/iicpc
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin123
       MINIO_BUCKET: submissions
-      SANDBOX_URL: http://sandbox:3001             # internal service call
+      SANDBOX_URL: http://sandbox:3001
+      KAFKA_BROKERS: redpanda:9092
       FRONTEND_URL: "http://localhost:3000"
     depends_on:
       redis:
         condition: service_healthy
+      timescale:
+        condition: service_healthy
       minio:
         condition: service_healthy
       sandbox:
-        condition: service_started                 # sandbox has no healthcheck yet
+        condition: service_started
     networks:
       - iicpc-network
 
@@ -47,6 +51,7 @@ services:
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin123
+      MAX_RUNTIME_MS: "600000"                     # 10 min auto-stop per submission
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # Dockerode needs Docker daemon access
     depends_on:
@@ -60,7 +65,75 @@ services:
       - iicpc-network   # talks to redis, minio, redpanda, gateway
       - sandbox-net     # talks to submission containers by internal IP
 
-  # ── Infrastructure Services ────────────────────────────────────────────────
+  
+  bot-fleet:
+      build:
+        context: ..
+        dockerfile: packages/bot-fleet/Dockerfile
+      container_name: iicpc-bot-fleet
+      restart: unless-stopped
+      env_file:
+        - ../.env
+      environment:
+        KAFKA_BROKERS: redpanda:9092
+        TELEMETRY_URL: http://telemetry:4000
+        BOT_COUNT: "20"           # 20 workers per submission
+        BOT_LAMBDA: "15"          # 15 orders/sec per bot (Poisson) → ~300 TPS total
+      depends_on:
+        redpanda:
+          condition: service_healthy
+        telemetry:
+          condition: service_started
+      networks:
+        - iicpc-network   # ← Kafka + Telemetry
+        - sandbox-net     # ← contestant containers by IP
+    
+  telemetry:
+    build:
+      context: ..
+      dockerfile: packages/telemetry/Dockerfile
+    container_name: iicpc-telemetry
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    env_file:
+      - ../.env
+    environment:
+      TELEMETRY_PORT: "4000"
+      TIMESCALE_URL: postgres://postgres:postgres@timescale:5432/iicpc
+      REDIS_URL: redis://redis:6379
+      KAFKA_BROKERS: redpanda:9092
+    depends_on:
+      timescale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    networks:
+      - iicpc-network   # ← receives from bots only
+
+  leaderboard:
+    build:
+      context: ..
+      dockerfile: packages/leaderboard/Dockerfile
+    container_name: iicpc-leaderboard
+    restart: unless-stopped
+    ports:
+      - "4001:4001"
+    env_file:
+      - ../.env
+    environment:
+      LEADERBOARD_PORT: "4001"
+      TIMESCALE_URL: postgres://postgres:postgres@timescale:5432/iicpc
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      timescale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - iicpc-network
 
   redpanda:
     image: redpandadata/redpanda:v25.1.4
@@ -145,3 +218,4 @@ networks:
     driver: bridge
     internal: true           # submission containers get NO internet routing
     name: sandbox-net        # pin exact name — runner.ts hardcodes 'sandbox-net', must match
+
