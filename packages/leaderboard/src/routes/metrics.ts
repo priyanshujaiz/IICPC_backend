@@ -10,6 +10,9 @@ const router: IRouter = Router();
  */
 router.get('/metrics/:submissionId', async (req: Request, res: Response) => {
   const { submissionId } = req.params;
+  // Accept ?window=5m or ?window=24h (default: 24h for historical view)
+  const windowParam = (req.query.window as string) ?? '24h';
+  const interval = windowParam === '5m' ? '5 minutes' : '24 hours';
 
   try {
     const result = await pool.query(
@@ -23,7 +26,7 @@ router.get('/metrics/:submissionId', async (req: Request, res: Response) => {
          composite_score
        FROM metrics
        WHERE submission_id = $1
-         AND time > NOW() - INTERVAL '5 minutes'
+         AND time > NOW() - INTERVAL '${interval}'
        ORDER BY time ASC`,
       [submissionId]
     );

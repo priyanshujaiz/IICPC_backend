@@ -56,13 +56,14 @@ submitRouter.post('/', requireAuth, upload.single('file'), async (req, res) => {
   const artifactPath = (req.file as Express.MulterS3.File).key;
   const language     = (req.body.language ?? 'cpp') as 'cpp' | 'rust' | 'go';
 
-  const { userId, username } = req.user!;
+  const { userId, username, teamName } = req.user!;
 
   // ── Write to Redis (fast path — polled by GET /runs/:id) ─────────────────
   await redis.set(`submission:${submissionId}:status`, 'queued');
   await redis.hset(`submission:${submissionId}:meta`, {
     contestantId:  userId,
     username,
+    teamName,
     artifactPath,
     submittedAt:   Date.now().toString(),
     language,

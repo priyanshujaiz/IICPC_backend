@@ -131,8 +131,8 @@ iicpc-platform/
 │           ├── RegisterPage.tsx         # Matching registration page
 │           ├── DashboardPage.tsx        # KPI cards (live /stats) + time-series charts
 │           ├── LeaderboardPage.tsx      # Real-time SSE table (team names, language badges, sparklines)
-│           ├── SubmitPage.tsx           # Language select → file upload → progress tracker → stop button
-│           ├── MyAnalyticsPage.tsx      # Per-submission deep-dive charts
+│           ├── SubmitPage.tsx           # Language select → file upload → progress tracker → active submissions panel
+│           ├── MyAnalyticsPage.tsx      # Per-submission deep-dive charts (with submission selector dropdown)
 │           ├── ComparePage.tsx          # Side-by-side submission comparison
 │           └── BotActivityPage.tsx      # Live bot fleet monitoring
 │
@@ -141,7 +141,8 @@ iicpc-platform/
 │   └── drizzle/                         # Drizzle-managed SQL migrations
 │       ├── 0000_*.sql                   # CREATE TABLE submissions + metrics
 │       ├── 0001_*.sql                   # create_hypertable() + indexes
-│       └── 0002_users.sql               # users table + idx_users_username
+│       ├── 0002_users.sql               # users table + idx_users_username
+│       └── 0003_add_team_profile.sql    # ADD team_name, email columns to users
 │
 ├── scripts/
 │   ├── migrate.ts                       # Apply all pending migrations to TimescaleDB
@@ -301,8 +302,8 @@ Base URL: `http://localhost:3000`
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
 | `GET` | `/health` | None | Liveness probe |
-| `POST` | `/auth/register` | None | Register — `{ username, password }` → `{ token, userId, username, role }` |
-| `POST` | `/auth/login` | None | Login — `{ username, password }` → `{ token, userId, username, role }` |
+| `POST` | `/auth/register` | None | Register — `{ username, teamName, password, email? }` → `{ token, userId, username, teamName, email, role }` |
+| `POST` | `/auth/login` | None | Login — `{ username, password }` → `{ token, userId, username, teamName, email, role }` |
 
 ### Submissions
 
@@ -320,7 +321,7 @@ Base URL: `http://localhost:3000`
 | `GET` | `/scores/snapshot` | One-shot leaderboard (team names, scores, language, status) |
 | `GET` | `/scores/stream` | SSE stream — pushes updated leaderboard every 1s |
 | `GET` | `/scores/stats` | Platform-wide KPIs (activeSubmissions, totalBots, platformTps, avgCorrectness) |
-| `GET` | `/metrics/:id` | Time-series data for a specific submission |
+| `GET` | `/metrics/:id?window=24h` | Time-series data for a submission (`?window=5m` or `24h`, default `24h`) |
 
 ### Sandbox Internal API (port 3001)
 
@@ -371,7 +372,9 @@ Stopping (user-initiated or auto-timeout):
   ↓ DELETE /runs/:id → Redis fleet:stop key → POST /sandbox/stop
   ↓ Container stopped + removed + image deleted (disk freed)
   ↓ Kafka submission.stopped → bot-fleet terminates all workers
-  ↓ Final score preserved in leaderboard
+  ↓ In-process telemetry buffers cleaned up (histograms, TPS, ref engine)
+  ↓ Final score + leaderboard position PRESERVED in Redis (not deleted)
+  ↓ Full metrics history retained in TimescaleDB (24h queryable)
 ```
 
 **Status lifecycle:**
@@ -390,7 +393,9 @@ queued → building → error               (build failure, health timeout, OOM)
 | Column | Type | Description |
 |---|---|---|
 | `id` | TEXT PK | UUID v4 |
-| `username` | TEXT UNIQUE | Contestant handle |
+| `username` | TEXT UNIQUE | Contestant login handle |
+| `team_name` | TEXT NOT NULL | Display name shown on leaderboard / dashboard |
+| `email` | TEXT | Optional contact email |
 | `password_hash` | TEXT | bcrypt hash (10 rounds) |
 | `role` | TEXT | `'admin'` or `'contestant'` |
 | `created_at` | TIMESTAMPTZ | Registration timestamp |
@@ -424,7 +429,7 @@ queued → building → error               (build failure, health timeout, OOM)
 | Key | Type | Contents |
 |---|---|---|
 | `submission:{id}:status` | String | `queued / building / running / stopped / error` |
-| `submission:{id}:meta` | Hash | `contestantId, username, artifactPath, language, submittedAt, containerId` |
+| `submission:{id}:meta` | Hash | `contestantId, username, teamName, artifactPath, language, submittedAt, containerId` |
 | `submission:{id}:score` | String (JSON) | `{ p50, p90, p99, tps, correctnessRate, compositeScore }` |
 | `leaderboard` | Sorted Set | member=submissionId, score=compositeScore |
 | `fleet:stop:{id}` | String | `"1"` — signals bots to drain (30s TTL) |
@@ -450,7 +455,7 @@ curl http://localhost:4001/scores/stats                     # platform KPIs
 # 1. Register
 curl -s -X POST http://localhost:3000/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"username":"team-alpha","password":"test123"}' | jq .
+  -d '{"username":"alphauser","teamName":"Team Alpha","password":"test123"}' | jq .
 
 # 2. Submit (replace TOKEN)
 curl -s -X POST http://localhost:3000/submit \

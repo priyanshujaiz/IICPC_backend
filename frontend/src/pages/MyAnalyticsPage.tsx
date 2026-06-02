@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   LineChart, Line, AreaChart, Area, XAxis, YAxis,
@@ -11,7 +12,7 @@ interface MetricPoint {
   tps: number; correctnessRate: number; compositeScore: number;
 }
 
-interface RunInfo { submissionId: string; status: string; }
+interface RunInfo { id: string; status: string; language: string; submittedAt: string; }
 
 const ChartTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload?.length) return null;
@@ -29,36 +30,40 @@ const ChartTooltip = ({ active, payload, label }: any) => {
 
 export function MyAnalyticsPage() {
   const { user } = useAuth();
+  const [selectedIdx, setSelectedIdx] = useState(0);
 
-  // Get my latest run
+  // Get all my runs
   const { data: runs = [] } = useQuery<RunInfo[]>({
     queryKey: ['my-runs'],
     queryFn: async () => {
       const res = await fetch('/api/runs', { headers: { Authorization: `Bearer ${user?.token}` } });
       if (!res.ok) return [];
-      return res.json();
+      const data = await res.json();
+      const subs: RunInfo[] = data.submissions ?? data ?? [];
+      // Sort newest first
+      return subs.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
     },
     refetchInterval: 10_000,
   });
 
-  const latestRun = runs[0];
+  const selectedRun = runs[selectedIdx] ?? runs[0];
 
-  // Get metrics for latest run
+  // Get metrics for selected run (last 24 hours)
   const { data: metrics } = useQuery<{ submissionId: string; dataPoints: MetricPoint[] }>({
-    queryKey: ['metrics', latestRun?.submissionId],
+    queryKey: ['metrics', selectedRun?.id],
     queryFn: async () => {
-      const res = await fetch(`/metrics/${latestRun!.submissionId}`);
-      if (!res.ok) return { submissionId: latestRun!.submissionId, dataPoints: [] };
+      const res = await fetch(`/metrics/${selectedRun!.id}`);
+      if (!res.ok) return { submissionId: selectedRun!.id, dataPoints: [] };
       return res.json();
     },
-    enabled: !!latestRun,
+    enabled: !!selectedRun,
     refetchInterval: 5_000,
   });
 
   const points = metrics?.dataPoints ?? [];
   const latest = points[points.length - 1];
 
-  if (!latestRun) {
+  if (!selectedRun) {
     return (
       <div className="fade-in" style={{ textAlign: 'center', padding: '80px 32px' }}>
         <div style={{ fontSize: '3rem', marginBottom: 12 }}>📊</div>
@@ -78,16 +83,32 @@ export function MyAnalyticsPage() {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div className="page-header__title">My Analytics</div>
-            <span className={`status-badge status-badge--${latestRun.status}`}>
-              {latestRun.status.toUpperCase()}
+            <span className={`status-badge status-badge--${selectedRun.status === 'running' ? 'live' : selectedRun.status}`}>
+              {selectedRun.status.toUpperCase()}
             </span>
           </div>
           <div className="page-header__sub mono" style={{ color: 'var(--muted)', fontSize: '0.8rem', marginTop: 4 }}>
-            {latestRun.submissionId}
+            {selectedRun.id}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <a href="/compare" className="btn btn--ghost">⚔ Compare with Others</a>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {runs.length > 1 && (
+            <select
+              value={selectedIdx}
+              onChange={e => setSelectedIdx(Number(e.target.value))}
+              style={{
+                background: 'var(--elevated)', color: 'var(--text)', border: '1px solid var(--border)',
+                borderRadius: 8, padding: '8px 12px', fontSize: '0.8rem', fontFamily: 'var(--font-mono)',
+                cursor: 'pointer',
+              }}
+            >
+              {runs.map((r, i) => (
+                <option key={r.id} value={i}>
+                  {r.id.slice(0, 8)}… · {r.language} · {r.status}
+                </option>
+              ))}
+            </select>
+          )}
           <a href="/leaderboard" className="btn btn--ghost">🏆 Leaderboard</a>
         </div>
       </div>

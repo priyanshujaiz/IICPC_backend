@@ -5,7 +5,9 @@ import { useAuth } from '../context/AuthContext';
 export function RegisterPage() {
   const { register } = useAuth();
   const navigate = useNavigate();
+  const [teamName, setTeamName]   = useState('');
   const [username, setUsername]   = useState('');
+  const [email, setEmail]         = useState('');
   const [password, setPassword]   = useState('');
   const [confirm, setConfirm]     = useState('');
   const [error, setError]         = useState('');
@@ -17,7 +19,7 @@ export function RegisterPage() {
     if (password.length < 6)  { setError('Password must be at least 6 characters'); return; }
     setError(''); setLoading(true);
     try {
-      await register(username, password);
+      await register(username, teamName, email, password);
       navigate('/submit');
     } catch (err) {
       setError((err as Error).message);
@@ -62,10 +64,22 @@ export function RegisterPage() {
             </div>
           )}
 
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div className="input-group">
+              <label className="input-label">Team Name</label>
+              <input className="input" type="text" placeholder="e.g. Team Alpha" value={teamName} onChange={e => setTeamName(e.target.value)} required autoFocus />
+              <span style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: -4 }}>Displayed on the leaderboard</span>
+            </div>
+
             <div className="input-group">
               <label className="input-label">Username</label>
-              <input className="input" type="text" placeholder="Enter your username" value={username} onChange={e => setUsername(e.target.value)} required autoFocus />
+              <input className="input" type="text" placeholder="Unique login ID (letters, numbers, _ -)" value={username} onChange={e => setUsername(e.target.value)} required />
+              <span style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: -4 }}>Used for sign-in — cannot be changed</span>
+            </div>
+
+            <div className="input-group">
+              <label className="input-label">Email <span style={{ fontWeight: 400, color: 'var(--dim)' }}>(optional)</span></label>
+              <input className="input" type="email" placeholder="team@example.com" value={email} onChange={e => setEmail(e.target.value)} />
             </div>
             
             <div className="input-group">
@@ -92,3 +106,4 @@ export function RegisterPage() {
     </div>
   );
 }
+

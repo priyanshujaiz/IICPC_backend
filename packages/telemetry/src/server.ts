@@ -31,13 +31,13 @@ async function startStopConsumer(): Promise<void> {
         if (!raw) return;
         const { submissionId } = JSON.parse(raw) as { submissionId: string };
 
-        console.log(`[telemetry] submission stopped: ${submissionId.slice(0, 8)} — cleaning up`);
+        console.log(`[telemetry] submission stopped: ${submissionId.slice(0, 8)} — cleaning up in-process state`);
 
-        // Remove from Redis leaderboard
-        await redis.zrem('leaderboard', submissionId);
-        await redis.del(`submission:${submissionId}:score`);
+        // NOTE: We intentionally keep the Redis leaderboard entry and score JSON
+        // so that stopped submissions retain their final score on the leaderboard.
+        // Only in-process telemetry buffers are cleaned up.
 
-        // Clean up in-process state
+        // Clean up in-process state (histograms, TPS windows, reference engine)
         resetEngine(submissionId);
         removeHistogram(submissionId);
         removeTpsWindow(submissionId);
