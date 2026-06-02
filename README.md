@@ -6,22 +6,6 @@ Contestants upload their trading engine code (C++, Rust, Go). The platform conta
 
 ---
 
-## Build Status
-
-| Phase | Service | Status | Notes |
-|---|---|---|---|
-| **Phase 0** | `packages/shared` | ✅ Complete | Types, Kafka helpers, Drizzle schema, config |
-| **Phase 0** | `infra/` + migrations | ✅ Complete | Docker Compose (9 services), TimescaleDB migrations |
-| **Phase 1** | `packages/gateway` | ✅ Complete | DB-backed JWT auth, MinIO upload, Redis status, sandbox trigger, admin stop |
-| **Phase 1** | `packages/sandbox` | ✅ Complete | Build pipeline, dual-NIC isolation, watchdog, max runtime, pre-warm images, container stop+cleanup |
-| **Phase 2** | `packages/bot-fleet` | ✅ Complete | 20 workers/submission, Poisson timing, circuit breaker, batch telemetry |
-| **Phase 2** | `packages/telemetry` | ✅ Complete | Fastify, HDR histogram, TPS counter, reference engine, 1s flush cycle |
-| **Phase 3** | `packages/leaderboard` | ✅ Complete | SSE stream, Redis sorted set, composite scoring, `/stats` + `/scores/snapshot` APIs |
-| **Phase 4** | `frontend/` | ✅ Complete | React + Vite, Recharts, live dashboard, leaderboard, submit page, analytics |
-| **Phase 5** | `infra/k8s/` | ⬜ Pending | Kubernetes manifests, HPA |
-
----
-
 ## Scoring Formula
 
 ```
