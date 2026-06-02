@@ -10,6 +10,7 @@ interface SnapshotEntry {
   rank: number;
   submissionId: string;
   compositeScore: number;
+  teamName?: string;
   contestantId?: string;
   language?: string;
   latencyP99?: number;
@@ -97,7 +98,7 @@ export function DashboardPage() {
       <div className="page-header">
         <div>
           <div className="page-header__title">
-            Hey, {user?.username} 👋
+            Hey, {user?.teamName ?? user?.username} 👋
           </div>
           <div className="page-header__sub">
             {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
@@ -174,7 +175,7 @@ export function DashboardPage() {
                 <TeamBar
                   key={entry.submissionId}
                   rank={i + 1}
-                  id={entry.submissionId}
+                  name={entry.teamName ?? entry.contestantId ?? entry.submissionId.slice(0, 8)}
                   score={entry.compositeScore}
                   maxScore={snapshot[0].compositeScore}
                 />
@@ -264,14 +265,14 @@ function KpiCard({ label, value, delta, direction, icon }: {
   );
 }
 
-function TeamBar({ rank, id, score, maxScore }: { rank: number; id: string; score: number; maxScore: number }) {
+function TeamBar({ rank, name, score, maxScore }: { rank: number; name: string; score: number; maxScore: number }) {
   const pct = maxScore > 0 ? (score / maxScore) * 100 : 0;
   const rankColors = ['#4f46e5', '#64748b', '#d97706', '#94a3b8', '#94a3b8'];
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: '0.8rem' }}>
         <span style={{ color: rankColors[rank - 1] ?? 'var(--muted)', fontWeight: 600 }}>
-          #{rank} {id.slice(0, 8)}
+          #{rank} {name}
         </span>
         <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>{score.toFixed(1)}</span>
       </div>

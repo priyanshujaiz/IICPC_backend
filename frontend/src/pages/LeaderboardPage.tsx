@@ -9,6 +9,7 @@ interface LiveEntry {
   rank: number;
   submissionId: string;
   compositeScore: number;
+  teamName?: string;
   contestantId?: string;
   language?: string;
   status?: string;
@@ -25,6 +26,13 @@ function useLeaderboard() {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
+    // Fetch snapshot immediately for instant render
+    fetch('/scores/snapshot')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: LiveEntry[]) => { if (data.length) setEntries(data); })
+      .catch(() => {});
+
+    // Then connect SSE for live updates
     const es = new EventSource('/scores/stream');
 
     es.onopen = () => setConnected(true);
@@ -38,7 +46,6 @@ function useLeaderboard() {
 
     es.onerror = () => {
       setConnected(false);
-      // EventSource auto-reconnects — don't close
     };
 
     return () => es.close();
@@ -149,12 +156,23 @@ export function LeaderboardPage() {
                       <RankBadge rank={i + 1} />
                     </td>
 
-                    {/* Team name + language */}
+                    {/* Team name + language + status */}
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <div>
-                          <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>
-                            {entry.contestantId ?? entry.submissionId.slice(0, 8)}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+                              {entry.teamName ?? entry.contestantId ?? entry.submissionId.slice(0, 8)}
+                            </span>
+                            {entry.status === 'running' ? (
+                              <span className="status-badge status-badge--live" style={{ fontSize: '0.6rem', padding: '1px 6px' }}>
+                                <span className="live-dot" style={{ width: 5, height: 5 }} />LIVE
+                              </span>
+                            ) : entry.status === 'stopped' ? (
+                              <span style={{ fontSize: '0.6rem', padding: '1px 6px', borderRadius: 4, background: 'var(--elevated)', color: 'var(--muted)', fontWeight: 600 }}>
+                                ENDED
+                              </span>
+                            ) : null}
                           </div>
                           <div className="mono" style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>
                             {entry.submissionId.slice(0, 8)}…

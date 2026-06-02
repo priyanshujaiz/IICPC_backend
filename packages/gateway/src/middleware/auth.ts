@@ -10,7 +10,9 @@ declare global {
     interface Request {
       user?: {
         userId:   string;                    // UUID — primary key from users table
-        username: string;                    // human-readable team/contestant name
+        username: string;                    // unique login identifier
+        teamName: string;                    // display name for leaderboard
+        email:    string | null;             // contact email (optional)
         role:     'admin' | 'contestant';
       };
     }
@@ -38,12 +40,16 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
     const payload = jwt.verify(token, JWT_SECRET) as {
       sub:      string;   // userId UUID
       username: string;
+      teamName: string;
+      email:    string | null;
       role:     string;
     };
 
     req.user = {
       userId:   payload.sub,
       username: payload.username,
+      teamName: payload.teamName ?? payload.username,
+      email:    payload.email ?? null,
       role:     payload.role as 'admin' | 'contestant',
     };
 

@@ -17,6 +17,8 @@ const registerSchema = z.object({
   username: z.string().min(3).max(32).regex(/^[a-zA-Z0-9_-]+$/, {
     message: 'username can only contain letters, numbers, _ and -',
   }),
+  teamName: z.string().min(2).max(64).trim(),
+  email: z.string().email().optional().or(z.literal('')),
   password: z.string().min(6),
 });
 
@@ -25,9 +27,9 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
-function issueToken(userId: string, username: string, role: string): string {
+function issueToken(userId: string, username: string, role: string, teamName: string, email: string | null): string {
   return jwt.sign(
-    { sub: userId, username, role },
+    { sub: userId, username, role, teamName, email },
     JWT_SECRET,
     { expiresIn: '30d' },
   );
@@ -41,7 +43,7 @@ authRouter.post('/register', async (req, res) => {
     return res.status(400).json({ error: parsed.error.flatten().fieldErrors });
   }
 
-  const { username, password } = parsed.data;
+  const { username, teamName, email, password } = parsed.data;
 
   // Check username is not already taken
   const existing = await db
@@ -60,14 +62,16 @@ authRouter.post('/register', async (req, res) => {
   await db.insert(users).values({
     id:           userId,
     username,
+    teamName,
+    email:        email || null,
     passwordHash,
     role:         'contestant',
   });
 
-  console.log(`[gateway] registered new contestant: ${username} (${userId})`);
+  console.log(`[gateway] registered new contestant: ${teamName} (@${username}) (${userId})`);
 
-  const token = issueToken(userId, username, 'contestant');
-  return res.status(201).json({ token, userId, username, role: 'contestant' });
+  const token = issueToken(userId, username, 'contestant', teamName, email || null);
+  return res.status(201).json({ token, userId, username, teamName, email: email || null, role: 'contestant' });
 });
 
 // ── POST /auth/login ──────────────────────────────────────────────────────────
@@ -97,6 +101,14 @@ authRouter.post('/login', async (req, res) => {
     return res.status(401).json({ error: 'invalid credentials' });
   }
 
-  const token = issueToken(user.id, user.username, user.role);
-  return res.json({ token, userId: user.id, username: user.username, role: user.role });
+  const token = issueToken(user.id, user.username, user.role, user.teamName, user.email);
+  return res.json({
+    token,
+    userId: user.id,
+    username: user.username,
+    teamName: user.teamName,
+    email: user.email,
+    role: user.role,
+  });
 });
+

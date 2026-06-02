@@ -37,7 +37,8 @@ async function getLeaderboardPayload(): Promise<object[]> {
       rank,
       submissionId,
       compositeScore,
-      contestantId: meta?.username ?? meta?.contestantId ?? 'unknown',  // human name
+      teamName:     meta?.teamName    ?? meta?.username ?? 'Unknown Team',
+      contestantId: meta?.teamName    ?? meta?.username ?? meta?.contestantId ?? 'unknown',
       language:     meta?.language     ?? 'unknown',
       submittedAt:  meta?.submittedAt  ? Number(meta.submittedAt) : null,
       status:       status             ?? 'unknown',

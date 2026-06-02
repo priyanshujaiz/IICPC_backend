@@ -218,6 +218,100 @@ h4 { font-size: 0.875rem; font-weight: 600; color: var(--muted); text-transform:
   font-size: 0.75rem; font-weight: 700; color: #fff;
 }
 
+/* ── User Dropdown ──────────────────────────────────────────────────────────── */
+.user-chip-wrapper {
+  position: relative;
+}
+
+.user-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 280px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12), 0 4px 12px rgba(0, 0, 0, 0.08);
+  z-index: 200;
+  overflow: hidden;
+  animation: dropdownSlideIn 180ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes dropdownSlideIn {
+  from { opacity: 0; transform: translateY(-8px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.user-dropdown__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+}
+
+.user-dropdown__avatar {
+  width: 40px; height: 40px;
+  background: linear-gradient(135deg, var(--accent) 0%, #818cf8 100%);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.9rem; font-weight: 700; color: #fff;
+  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+}
+
+.user-dropdown__name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.user-dropdown__meta {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.user-dropdown__divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0;
+}
+
+.user-dropdown__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.user-dropdown__item:hover {
+  background: var(--elevated);
+}
+
+.user-dropdown__item--danger {
+  color: var(--red);
+}
+
+.user-dropdown__item--danger:hover {
+  background: var(--red-dim);
+}
+
+.user-dropdown__role-badge {
+  margin-left: auto;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
 /* ── Cards ──────────────────────────────────────────────────────────────────── */
 .card {
   background: var(--card);
