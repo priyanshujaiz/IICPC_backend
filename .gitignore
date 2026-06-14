@@ -1,7 +1,6 @@
 # Dependencies
 node_modules/
 
-
 # Build outputs
 dist/
 *.tsbuildinfo
@@ -20,3 +19,5 @@ pnpm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+docs/
