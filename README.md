@@ -131,13 +131,8 @@ iicpc-platform/
 ├── scripts/
 │   ├── migrate.ts                       # Apply all pending migrations to TimescaleDB
 │   └── wait-for-infra.sh                # Poll Docker health endpoints
-│
-└── docs/
-    ├── exchange-api.md                  # ⭐ Contestant API contract (what your code must implement)
-    ├── blueprint.md                     # Full system architecture blueprint
-    ├── database-design.md               # Three-store schema (TimescaleDB · Redis · MinIO)
-    ├── IIcpc_hackathon.md               # Hackathon requirements and rules
-    └── phase-planner.md                 # Phase-by-phase engineering roadmap
+
+
 ```
 
 ---
